@@ -10,6 +10,7 @@
 #include "system/loggerd/encoder/ffmpeg_encoder.h"
 #define Encoder FfmpegEncoder
 #endif
+// __JETSON__ uses FfmpegEncoder via the #else path above (NVENC acceleration via ffmpeg)
 
 ExitHandler do_exit;
 
