@@ -1,36 +1,73 @@
 # DragonPilot Jetson AGX Xavier Port
 
-This directory contains all documentation for porting DragonPilot 0.10.3 to the NVIDIA Jetson AGX Xavier platform.
+Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 
-## Documents
+![DragonPilot rodando na Jetson AGX Xavier](assets/ui_running_on_jetson.png)
+*UI do DragonPilot rodando na Jetson AGX Xavier via replay demo — inferencia CUDA em tempo real na GPU Volta*
 
-| Document | Description |
-|----------|-------------|
-| [Setup Guide](SETUP_GUIDE.md) | Complete step-by-step guide to build and run without errors |
-| [Porting Plan](PORTING_PLAN.md) | Complete phased plan for the port (Phases 0-7) |
-| [Architecture Analysis](ARCHITECTURE_ANALYSIS.md) | Hardware abstraction, build system, GPU pipeline analysis |
-| [File Inventory](FILE_INVENTORY.md) | All files to modify/create with details |
-| [Hardware Specs](HARDWARE_SPECS.md) | Jetson AGX Xavier specs and comparison with comma Tici |
+## Status
 
-## Quick Overview
+| Componente | Status | Detalhes |
+|------------|--------|----------|
+| Build system (`jarch64`) | OK | scons compila sem erros |
+| Hardware abstraction | OK | Classe Jetson com thermal, fan, DFS |
+| Inferencia CUDA (modeld) | OK | ~19ms total (vision 8.7ms + policy 3.3ms + dmon 6.5ms) |
+| UI (raylib/OpenGL) | OK | 60 FPS, fullscreen, VSync, render texture |
+| Replay (NVDEC) | OK | Decode HW via V4L2/CUDA hwaccel |
+| Encoder (NVENC) | OK | h264_nvmpi / h264_nvenc |
+| Acesso remoto (VNC) | OK | x11vnc com clip exato na UI (960x480) |
+| Camera USB (webcam) | Pendente | webcamerad pronto, falta testar |
+| Panda USB (CAN) | Pendente | pandad pronto, falta conectar hardware |
 
-**Goal**: Run DragonPilot 0.10.3 natively on NVIDIA Jetson AGX Xavier
+## Documentacao
 
-**Approach**: Full modern port (Path B) - not based on old xnxpilot 0.8.9
+| Documento | Descricao |
+|-----------|-----------|
+| [Setup Guide](SETUP_GUIDE.md) | Guia completo passo-a-passo para compilar e rodar |
+| [Porting Plan](PORTING_PLAN.md) | Plano detalhado do port (Fases 0-7) |
+| [Architecture Analysis](ARCHITECTURE_ANALYSIS.md) | Analise de hardware abstraction, build system, GPU pipeline |
+| [File Inventory](FILE_INVENTORY.md) | Inventario de todos os arquivos modificados/criados |
+| [Hardware Specs](HARDWARE_SPECS.md) | Specs da Jetson AGX Xavier vs comma Tici |
 
-**Key Changes**:
-- Platform identity: `jarch64` with `-D__JETSON__` flag
-- GPU compute: Qualcomm QCOM/Adreno -> NVIDIA CUDA (Volta sm_72)
-- Camera: Qualcomm Spectra ISP -> USB webcam (Phase 4) / MIPI CSI-2 (Phase 4b)
-- Memory: ION allocator -> Standard OpenCL `visionbuf_cl.cc`
-- Model inference: tinygrad `DEV=QCOM` -> `DEV=CUDA`
+## Arquitetura do Port
 
-**Phases**:
-- Phase 0: Environment preparation (Python 3.11, CUDA, toolchain)
-- Phase 1: Platform identity and build system
-- Phase 2: VisionIPC and OpenCL validation
-- Phase 3: Model inference with tinygrad CUDA
-- Phase 4: Camera pipeline
-- Phase 5: Vehicle communication (Panda USB)
-- Phase 6: Performance optimization
-- Phase 7: Integration testing
+```
+comma Tici (Snapdragon 845)          Jetson AGX Xavier (Volta)
+─────────────────────────────        ─────────────────────────────
+Qualcomm Spectra ISP (camera)   →    USB webcam / MIPI CSI-2
+Adreno 618 GPU (OpenCL)        →    Volta GPU (CUDA sm_72)
+ION memory allocator            →    Standard OpenCL (visionbuf_cl)
+tinygrad DEV=QCOM               →    tinygrad DEV=CUDA FLOAT16=1
+V4L2 encoder (Qualcomm)        →    NVENC (h264_nvmpi)
+Qualcomm NVDEC                  →    NVDEC (V4L2 nvv4l2dec)
+AGNOS (custom Android)          →    JetPack 5.x (Ubuntu 20.04)
+```
+
+## Performance
+
+| Metrica | Valor |
+|---------|-------|
+| Inferencia driving_vision | ~8.7ms |
+| Inferencia driving_policy | ~3.3ms |
+| Inferencia dmonitoring | ~6.5ms |
+| **Total inferencia** | **~19ms** (< 50ms target) |
+| UI FPS | 60 FPS (VSync) |
+| Power mode | MAXN 30W (8 cores, GPU max) |
+
+## Quick Start
+
+```bash
+# Na Jetson (via SSH):
+cd /data/openpilot
+source .venv/bin/activate
+export DISPLAY=:0 BIG=1 SCALE=0.889
+
+# Iniciar VNC + UI + Replay
+x11vnc -display :0 -forever -shared -clip 1920x960+0+60 -scale 0.5 -rfbport 5900 -bg
+nohup python3 -m selfdrive.ui.ui > /tmp/ui.log 2>&1 &
+TERM=xterm ./tools/replay/replay --demo
+
+# No PC: conectar VNC em 192.168.3.152:5900
+```
+
+Veja o [Setup Guide](SETUP_GUIDE.md) para instrucoes completas.
