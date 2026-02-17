@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 import os
-from openpilot.system.hardware import TICI
-os.environ['DEV'] = 'QCOM' if TICI else 'CPU'
+from openpilot.system.hardware import TICI, JETSON
+if TICI:
+  os.environ['DEV'] = 'QCOM'
+elif JETSON:
+  os.environ['DEV'] = 'CUDA'
+else:
+  os.environ['DEV'] = 'CPU'
 from tinygrad.tensor import Tensor
 from tinygrad.dtype import dtypes
 import time
@@ -52,10 +57,11 @@ class ModelState:
 
     input_img_cl = self.frame.prepare(buf, transform.flatten())
     if TICI:
-      # The imgs tensors are backed by opencl memory, only need init once
+      # The imgs tensors are backed by Qualcomm opencl memory, only need init once
       if 'input_img' not in self.tensor_inputs:
         self.tensor_inputs['input_img'] = qcom_tensor_from_opencl_address(input_img_cl.mem_address, self.input_shapes['input_img'], dtype=dtypes.uint8)
     else:
+      # Generic path: OpenCL buffer → CPU → Tensor (used by Jetson CUDA, PC CPU)
       self.tensor_inputs['input_img'] = Tensor(self.frame.buffer_from_cl(input_img_cl).reshape(self.input_shapes['input_img']), dtype=dtypes.uint8).realize()
 
 

@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 import os
-from openpilot.system.hardware import TICI
-os.environ['DEV'] = 'QCOM' if TICI else 'CPU'
+from openpilot.system.hardware import TICI, JETSON
+if TICI:
+  os.environ['DEV'] = 'QCOM'
+elif JETSON:
+  os.environ['DEV'] = 'CUDA'
+else:
+  os.environ['DEV'] = 'CPU'
 USBGPU = "USBGPU" in os.environ
 if USBGPU:
   os.environ['DEV'] = 'AMD'
@@ -194,11 +199,12 @@ class ModelState:
     imgs_cl = {name: self.frames[name].prepare(bufs[name], transforms[name].flatten()) for name in self.vision_input_names}
 
     if TICI and not USBGPU:
-      # The imgs tensors are backed by opencl memory, only need init once
+      # The imgs tensors are backed by Qualcomm opencl memory, only need init once
       for key in imgs_cl:
         if key not in self.vision_inputs:
           self.vision_inputs[key] = qcom_tensor_from_opencl_address(imgs_cl[key].mem_address, self.vision_input_shapes[key], dtype=dtypes.uint8)
     else:
+      # Generic path: OpenCL buffer → CPU → Tensor (used by Jetson CUDA, PC CPU, USBGPU)
       for key in imgs_cl:
         frame_input = self.frames[key].buffer_from_cl(imgs_cl[key]).reshape(self.vision_input_shapes[key])
         self.vision_inputs[key] = Tensor(frame_input, dtype=dtypes.uint8).realize()
