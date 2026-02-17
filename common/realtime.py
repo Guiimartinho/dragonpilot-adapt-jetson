@@ -36,7 +36,10 @@ def set_core_affinity(cores: list[int]) -> None:
 def config_realtime_process(cores: int | list[int], priority: int) -> None:
   gc.disable()
   if sys.platform == 'linux' and not PC:
-    os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(priority))
+    try:
+      os.sched_setscheduler(0, os.SCHED_FIFO, os.sched_param(priority))
+    except PermissionError:
+      print(f"WARNING: SCHED_FIFO not permitted (priority={priority}), running without real-time scheduling")
   c = cores if isinstance(cores, list) else [cores, ]
   set_core_affinity(c)
 
