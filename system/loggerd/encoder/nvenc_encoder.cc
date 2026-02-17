@@ -52,8 +52,10 @@ NvencEncoder::NvencEncoder(const EncoderInfo &encoder_info, int in_width, int in
   frame->linesize[1] = out_width;       // UV stride (interleaved, same width as Y)
 
   if (in_width != out_width || in_height != out_height) {
-    // Downscale buffer in NV12 format: Y plane + UV plane (half height)
+    // Pre-allocate all buffers for downscaling to avoid per-frame heap allocation
     downscale_buf.resize(out_width * out_height * 3 / 2);
+    src_i420_buf.resize(in_width * in_height * 3 / 2);
+    dst_i420_buf.resize(out_width * out_height * 3 / 2);
   }
 }
 
@@ -137,8 +139,11 @@ void NvencEncoder::encoder_close() {
 }
 
 int NvencEncoder::encode_frame(VisionBuf* buf, VisionIpcBufExtra *extra) {
-  assert(buf->width == (size_t)this->in_width);
-  assert(buf->height == (size_t)this->in_height);
+  if (buf->width != (size_t)this->in_width || buf->height != (size_t)this->in_height) {
+    LOGE("NvencEncoder: buffer dimensions mismatch: got %zux%zu, expected %dx%d",
+         buf->width, buf->height, this->in_width, this->in_height);
+    return -1;
+  }
 
   // VisionBuf provides NV12 data: buf->y (Y plane), buf->uv (interleaved UV plane), buf->stride
   uint8_t *src_y = buf->y;
@@ -147,15 +152,9 @@ int NvencEncoder::encode_frame(VisionBuf* buf, VisionIpcBufExtra *extra) {
   int src_stride_uv = buf->stride;
 
   if (downscale_buf.size() > 0) {
-    // Need to downscale: convert NV12->I420 at input size, scale, then convert back to NV12
-    // For simplicity we do: NV12 crop/scale using libyuv NV12Scale
-    // libyuv does not have a direct NV12Scale, so we scale via I420 intermediate
-
-    // Allocate temporaries on the stack for the intermediate I420 buffers
-    std::vector<uint8_t> src_i420(in_width * in_height * 3 / 2);
-    std::vector<uint8_t> dst_i420(out_width * out_height * 3 / 2);
-
-    uint8_t *si_y = src_i420.data();
+    // Need to downscale: NV12->I420 at input size, scale, then I420->NV12 at output size.
+    // Uses pre-allocated buffers to avoid per-frame heap allocation in the hot path.
+    uint8_t *si_y = src_i420_buf.data();
     uint8_t *si_u = si_y + in_width * in_height;
     uint8_t *si_v = si_u + (in_width / 2) * (in_height / 2);
 
@@ -167,7 +166,7 @@ int NvencEncoder::encode_frame(VisionBuf* buf, VisionIpcBufExtra *extra) {
                        si_v, in_width / 2,
                        in_width, in_height);
 
-    uint8_t *di_y = dst_i420.data();
+    uint8_t *di_y = dst_i420_buf.data();
     uint8_t *di_u = di_y + out_width * out_height;
     uint8_t *di_v = di_u + (out_width / 2) * (out_height / 2);
 

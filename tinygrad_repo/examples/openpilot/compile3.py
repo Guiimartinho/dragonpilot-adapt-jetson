@@ -17,9 +17,12 @@ def compile(onnx_file):
   input_shapes = {name: spec.shape for name, spec in run_onnx.graph_inputs.items()}
   input_types = {name: spec.dtype for name, spec in run_onnx.graph_inputs.items()}
 
-  # Float inputs and outputs to tinyjits for openpilot are always float32
-  # TODO this seems dumb
-  input_types = {k:(dtypes.float32 if v is dtypes.float16 else v) for k,v in input_types.items()}
+  # Float inputs to tinyjits: keep FP16 on CUDA with FLOAT16=1 (Volta/Turing/Ampere tensor cores),
+  # otherwise upcast to float32 for compatibility
+  if getenv("FLOAT16") and Device.DEFAULT == "CUDA":
+    pass  # Keep native FP16 input types for CUDA tensor core acceleration
+  else:
+    input_types = {k:(dtypes.float32 if v is dtypes.float16 else v) for k,v in input_types.items()}
   Tensor.manual_seed(100)
   inputs = {k:Tensor(Tensor.randn(*shp, dtype=input_types[k]).mul(8).realize().numpy(), device='NPY') for k,shp in sorted(input_shapes.items())}
   if not getenv("NPY_IMG"):

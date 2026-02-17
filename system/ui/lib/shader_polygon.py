@@ -189,9 +189,7 @@ def _configure_shader_color(state: ShaderState, color: Optional[rl.Color],
 def triangulate(pts: np.ndarray) -> list[tuple[float, float]]:
   """Only supports simple polygons with two chains (ribbon)."""
 
-  # TODO: consider deduping close screenspace points
   # interleave points to produce a triangle strip
-  # assert len(pts) % 2 == 0, "Interleaving expects even number of points"
   if len(pts) % 2 != 0:
     pts = pts[:-1]
 
@@ -201,6 +199,28 @@ def triangulate(pts: np.ndarray) -> list[tuple[float, float]]:
     tri_strip.append(pts[-i - 1])
 
   return cast(list, np.array(tri_strip).tolist())
+
+
+# Cache for triangulated vertices: key = (pts bytes hash, length) → tri_strip
+_tri_cache: dict[int, list[tuple[float, float]]] = {}
+_TRI_CACHE_MAX = 64
+
+
+def _cached_triangulate(pts: np.ndarray) -> list[tuple[float, float]]:
+  """Triangulate with LRU-style cache for repeated polygons (same shape across frames)."""
+  key = hash(pts.tobytes())
+  result = _tri_cache.get(key)
+  if result is not None:
+    return result
+
+  result = triangulate(pts)
+
+  # Evict oldest entries if cache is full
+  if len(_tri_cache) >= _TRI_CACHE_MAX:
+    # Remove first (oldest) entry
+    _tri_cache.pop(next(iter(_tri_cache)))
+  _tri_cache[key] = result
+  return result
 
 
 def draw_polygon(origin_rect: rl.Rectangle, points: np.ndarray,
@@ -224,8 +244,8 @@ def draw_polygon(origin_rect: rl.Rectangle, points: np.ndarray,
   # Configure gradient shader
   _configure_shader_color(state, color, gradient, origin_rect)
 
-  # Triangulate via interleaving
-  tri_strip = triangulate(pts)
+  # Triangulate via interleaving (with cache for repeated polygons)
+  tri_strip = _cached_triangulate(pts)
 
   # Draw strip, color here doesn't matter
   rl.begin_shader_mode(state.shader)

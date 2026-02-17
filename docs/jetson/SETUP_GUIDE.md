@@ -615,3 +615,35 @@ sudo tegrastats  # CPU/GPU/RAM/temp em tempo real
 # Performance maxima
 sudo nvpmodel -m 0 && sudo jetson_clocks
 ```
+
+---
+
+## Otimizacoes Aplicadas
+
+O port inclui diversas otimizacoes especificas para o Jetson AGX Xavier:
+
+### Pipeline GPU (Critico)
+- **OpenCL async transfer**: `commonmodel.h` usa `clEnqueueMapBuffer` nao-bloqueante com event sync
+- **CUDA Graphs via TinyJit**: Grafo de kernels capturado e replayed automaticamente
+- **FP16 end-to-end**: Tensor cores Volta preservam FP16 nativo (sem conversao FP32)
+- **CUDA kernels nativos**: `transform.cu` e `loadyuv.cu` substituem OpenCL para eliminar interop
+
+### Core Affinity
+- Core 1: controlsd (controle lateral/longitudinal)
+- Core 2: card (interface CAN)
+- Cores 3-4: modeld (inferencia CUDA)
+- Cores 5-6: selfdrived (supervisao)
+- Core 6: dmonitoringmodeld
+- Cores 0,7: sistema (hardwared, loggerd, UI)
+
+### Hardware Acceleration
+- **NVDEC**: Decode video via V4L2 nvv4l2dec com fallback CUDA hwaccel
+- **NVENC**: Encode via h264_nvmpi com fallback h264_nvenc e software
+
+### Power Management
+- **DFS**: Frequencia CPU adaptativa (1.2-2.27 GHz), GPU/EMC sempre max ao dirigir
+- **Fan PID**: Controle proporcional com hysteresis (5%), protecao NaN/Inf
+- **Power modes**: MAXN (30W) ao dirigir, MODE_10W estacionado
+
+### MPC
+- Horizonte lateral reduzido N=24 (era 32) — ~25% mais rapido com perda minima

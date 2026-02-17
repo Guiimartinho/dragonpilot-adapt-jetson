@@ -11,6 +11,10 @@ NetworkStrength = log.DeviceState.NetworkStrength
 
 
 class Jetson(HardwareBase):
+  def __init__(self):
+    self.dfs = None
+    self._watchdog_stop = threading.Event()
+
   def get_os_version(self):
     try:
       with open("/etc/nv_tegra_release") as f:
@@ -187,8 +191,10 @@ class Jetson(HardwareBase):
 
   def _jetson_clocks_watchdog(self):
     """Re-apply jetson_clocks if thermal throttling undoes frequency lock."""
-    while True:
-      time.sleep(120)  # Check every 2 minutes
+    while not self._watchdog_stop.is_set():
+      self._watchdog_stop.wait(timeout=120)  # Check every 2 minutes, interruptible
+      if self._watchdog_stop.is_set():
+        break
       try:
         with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") as f:
           freq = int(f.read().strip())
@@ -196,6 +202,40 @@ class Jetson(HardwareBase):
           subprocess.call(["sudo", "jetson_clocks"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
       except Exception:
         pass
+
+  def stop_watchdog(self):
+    """Stop the watchdog thread cleanly."""
+    self._watchdog_stop.set()
+
+  def get_voltage(self) -> float:
+    """Read total bus voltage in millivolts from INA3221 power monitor."""
+    for channel in range(1, 4):
+      for base in ["/sys/bus/i2c/drivers/ina3221/1-0040/hwmon",
+                   "/sys/bus/i2c/drivers/ina3221x/1-0040/hwmon"]:
+        try:
+          if os.path.exists(base):
+            hwmon = os.listdir(base)[0]
+            with open(f"{base}/{hwmon}/in{channel}_input") as f:
+              return float(f.read().strip())  # millivolts
+        except (OSError, ValueError, IndexError):
+          continue
+    return 0.0
+
+  def get_current(self) -> float:
+    """Read total bus current in milliamps from INA3221 power monitor."""
+    total_ma = 0.0
+    for channel in range(1, 4):
+      for base in ["/sys/bus/i2c/drivers/ina3221/1-0040/hwmon",
+                   "/sys/bus/i2c/drivers/ina3221x/1-0040/hwmon"]:
+        try:
+          if os.path.exists(base):
+            hwmon = os.listdir(base)[0]
+            with open(f"{base}/{hwmon}/curr{channel}_input") as f:
+              total_ma += float(f.read().strip())
+            break
+        except (OSError, ValueError, IndexError):
+          continue
+    return total_ma
 
   def get_networks(self):
     return None

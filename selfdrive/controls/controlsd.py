@@ -239,7 +239,8 @@ class Controls:
 
 
 def main():
-  config_realtime_process([1, 2] if JETSON else 4, Priority.CTRL_HIGH)
+  # Jetson core affinity: controlsd on core 1, card on core 2, selfdrived on cores 5-6
+  config_realtime_process(1 if JETSON else 4, Priority.CTRL_HIGH)
   controls = Controls()
   controls.run()
 

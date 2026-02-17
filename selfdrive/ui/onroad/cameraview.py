@@ -88,8 +88,9 @@ class CameraView(Widget):
     self.texture_y: rl.Texture | None = None
     self.texture_uv: rl.Texture | None = None
 
-    # EGL resources
+    # EGL resources with LRU eviction (VisionIPC typically uses 4-8 buffers)
     self.egl_images: dict[int, EGLImage] = {}
+    self._egl_max_cache = 12  # Allow some headroom over typical buffer count
     self.egl_texture: rl.Texture | None = None
 
     self._placeholder_color: rl.Color | None = None
@@ -241,6 +242,10 @@ class CameraView(Widget):
     if egl_image is None:
       egl_image = create_egl_image(self.frame.width, self.frame.height, self.frame.stride, self.frame.fd, self.frame.uv_offset)
       if egl_image:
+        # Evict oldest entries if cache exceeds limit
+        while len(self.egl_images) >= self._egl_max_cache:
+          oldest_key = next(iter(self.egl_images))
+          destroy_egl_image(self.egl_images.pop(oldest_key))
         self.egl_images[idx] = egl_image
       else:
         return

@@ -87,10 +87,17 @@ bool NvdecVideoDecoder::open(AVCodecParameters *codecpar, bool hw_decoder) {
         rWarning("Failed to create CUDA hw device context: %d. Falling back to CPU decoding.", ret);
         hw_pix_fmt = AV_PIX_FMT_NONE;
       } else {
-        decoder_ctx->hw_device_ctx = av_buffer_ref(hw_device_ctx);
-        decoder_ctx->opaque = &hw_pix_fmt;
-        decoder_ctx->get_format = get_nvdec_hw_format;
-        rInfo("NVDEC: using CUDA hwaccel for decoding");
+        AVBufferRef *hw_ref = av_buffer_ref(hw_device_ctx);
+        if (!hw_ref) {
+          rWarning("Failed to create hw_device_ctx reference. Falling back to CPU decoding.");
+          av_buffer_unref(&hw_device_ctx);
+          hw_pix_fmt = AV_PIX_FMT_NONE;
+        } else {
+          decoder_ctx->hw_device_ctx = hw_ref;
+          decoder_ctx->opaque = &hw_pix_fmt;
+          decoder_ctx->get_format = get_nvdec_hw_format;
+          rInfo("NVDEC: using CUDA hwaccel for decoding");
+        }
       }
     } else {
       rWarning("CUDA hardware config not found for codec. Falling back to CPU decoding.");
@@ -99,6 +106,12 @@ bool NvdecVideoDecoder::open(AVCodecParameters *codecpar, bool hw_decoder) {
 
   if (avcodec_open2(decoder_ctx, decoder, nullptr) < 0) {
     rError("Failed to open NVDEC codec");
+    // Clean up hw_device_ctx on failure to prevent memory leak
+    if (hw_device_ctx) {
+      av_buffer_unref(&hw_device_ctx);
+    }
+    avcodec_free_context(&decoder_ctx);
+    decoder_ctx = nullptr;
     return false;
   }
 
@@ -177,6 +190,12 @@ AVFrame *NvdecVideoDecoder::decodeFrame(AVPacket *pkt) {
 }
 
 bool NvdecVideoDecoder::copyBuffer(AVFrame *f, VisionBuf *buf) {
+  // Validate frame dimensions to prevent buffer overflows
+  if (f->linesize[0] < width) {
+    rError("NVDEC: Y plane linesize %d < width %d, aborting copy", f->linesize[0], width);
+    return false;
+  }
+
   // On Jetson, V4L2 NVDEC decoders output NV12 natively.
   // CUDA hwaccel also outputs NV12 after transfer.
   // In both cases, data[0] = Y plane, data[1] = interleaved UV plane.
@@ -193,9 +212,11 @@ bool NvdecVideoDecoder::copyBuffer(AVFrame *f, VisionBuf *buf) {
       memcpy(buf->y + (i * 2 + 0) * buf->stride, f->data[0] + (i * 2 + 0) * f->linesize[0], width);
       memcpy(buf->y + (i * 2 + 1) * buf->stride, f->data[0] + (i * 2 + 1) * f->linesize[0], width);
       // Swap UV pairs: NV21 (VUVU) -> NV12 (UVUV)
+      // Use width rounded down to even to prevent out-of-bounds access on odd widths
       const uint8_t *src = f->data[1] + i * f->linesize[1];
       uint8_t *dst = buf->uv + i * buf->stride;
-      for (int j = 0; j < width; j += 2) {
+      int even_width = width & ~1;
+      for (int j = 0; j < even_width; j += 2) {
         dst[j] = src[j + 1];      // U
         dst[j + 1] = src[j];      // V
       }

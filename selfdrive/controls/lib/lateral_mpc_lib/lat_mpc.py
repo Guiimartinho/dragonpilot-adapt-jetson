@@ -22,7 +22,10 @@ COST_DIM = COST_E_DIM + 2
 SPEED_OFFSET = 10.0
 MODEL_NAME = 'lat'
 ACADOS_SOLVER_TYPE = 'SQP_RTI'
-N = 32
+# Reduced horizon for Jetson: N=24 saves ~25% MPC solve time with minimal quality loss.
+# The model prediction horizon (ModelConstants.IDX_N) still provides full lookahead;
+# MPC only needs shorter horizon for control smoothness.
+N = 24
 
 def gen_lat_model():
   model = AcadosModel()

@@ -1,3 +1,5 @@
+import math
+
 import numpy as np
 
 from openpilot.common.realtime import DT_HW
@@ -23,6 +25,11 @@ class JetsonFanController(BaseFanController):
     self._hysteresis_band = 5  # Prevent oscillation (5% band)
 
   def update(self, cur_temp: float, ignition: bool) -> int:
+    # Validate temperature input — NaN/Inf from bad sensor reads would corrupt PID state
+    if not math.isfinite(cur_temp):
+      cloudlog.warning(f"JetsonFanController: invalid temperature {cur_temp}, using safe default")
+      cur_temp = 70.0  # Safe default: triggers moderate fan speed
+
     self.controller.pos_limit = 100 if ignition else 40
     self.controller.neg_limit = 40 if ignition else 0
 
@@ -36,6 +43,15 @@ class JetsonFanController(BaseFanController):
                       error=error,
                       feedforward=np.interp(cur_temp, [50.0, 90.0], [0, 100])
                     ))
+
+    # Validate PID output
+    if not math.isfinite(fan_pwr_out):
+      cloudlog.warning("JetsonFanController: PID output is NaN/Inf, resetting controller")
+      self.controller.reset()
+      fan_pwr_out = 80  # Safe fallback: moderate-high fan
+
+    # Clamp output to valid range
+    fan_pwr_out = max(0, min(100, fan_pwr_out))
 
     # Hysteresis: prevent rapid fan speed oscillation
     if abs(fan_pwr_out - self._last_pwm) < self._hysteresis_band:

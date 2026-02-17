@@ -34,4 +34,8 @@ private:
   AVCodecContext *codec_ctx = nullptr;
   AVFrame *frame = nullptr;
   std::vector<uint8_t> downscale_buf;
+
+  // Pre-allocated intermediate buffers for downscaling (avoid per-frame allocation)
+  std::vector<uint8_t> src_i420_buf;
+  std::vector<uint8_t> dst_i420_buf;
 };

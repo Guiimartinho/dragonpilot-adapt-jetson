@@ -7,6 +7,8 @@ elif JETSON:
   os.environ['DEV'] = 'CUDA'
   os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
   os.environ.setdefault('FLOAT16', '1')
+  os.environ.setdefault('CUDA_OPT', '1')
+  os.environ.setdefault('JIT_BATCH_SIZE', '0')
 else:
   os.environ['DEV'] = 'CPU'
 from tinygrad.tensor import Tensor

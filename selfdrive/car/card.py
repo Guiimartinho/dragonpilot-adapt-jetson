@@ -316,7 +316,8 @@ class Car:
 
 
 def main():
-  config_realtime_process([1, 2] if JETSON else 4, Priority.CTRL_HIGH)
+  # Jetson core affinity: card on core 2 (separate from controlsd=1, selfdrived=5-6)
+  config_realtime_process(2 if JETSON else 4, Priority.CTRL_HIGH)
   car = Car()
   car.card_thread()
 

@@ -5,11 +5,13 @@ if TICI:
   os.environ['DEV'] = 'QCOM'
 elif JETSON:
   os.environ['DEV'] = 'CUDA'
-  # CUDA optimizations for Jetson AGX Xavier
+  # CUDA optimizations for Jetson AGX Xavier (Volta sm_72)
   os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Async kernel launches
   os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
   os.environ['CUDA_VISIBLE_DEVICES'] = '0'
-  os.environ.setdefault('FLOAT16', '1')  # Force FP16 for Volta tensor cores
+  os.environ.setdefault('FLOAT16', '1')  # FP16 for Volta tensor cores
+  os.environ.setdefault('CUDA_OPT', '1')  # Enable CUDA-specific optimizations in tinygrad
+  os.environ.setdefault('JIT_BATCH_SIZE', '0')  # Capture full graph in single JIT batch
 else:
   os.environ['DEV'] = 'CPU'
 USBGPU = "USBGPU" in os.environ
@@ -190,6 +192,8 @@ class ModelState:
     with open(POLICY_PKL_PATH, "rb") as f:
       self.policy_run = pickle.load(f)
 
+    self._jit_warmed_up = False
+
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
     return parsed_model_outputs
@@ -217,6 +221,8 @@ class ModelState:
     if prepare_only:
       return None
 
+    # TinyJit captures the CUDA kernel graph on first 3 runs, then replays it.
+    # After warmup, kernel launch overhead is minimal (single graph launch).
     self.vision_output = self.vision_run(**self.vision_inputs).contiguous().realize().uop.base.buffer.numpy()
     vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(self.vision_output, self.vision_output_slices))
 
@@ -226,6 +232,10 @@ class ModelState:
     self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
 
     self.policy_output = self.policy_run(**self.policy_inputs).contiguous().realize().uop.base.buffer.numpy()
+
+    if not self._jit_warmed_up:
+      self._jit_warmed_up = True
+      cloudlog.warning("modeld: TinyJit warmup complete, CUDA graphs captured")
     policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(self.policy_output, self.policy_output_slices))
 
     combined_outputs_dict = {**vision_outputs_dict, **policy_outputs_dict}
