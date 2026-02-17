@@ -23,19 +23,25 @@ vipc_sources = [f'{visionipc_dir.abspath}/{f}' for f in vipc_files]
 
 if arch == "larch64":
   vipc_sources += [f'{visionipc_dir.abspath}/visionbuf_ion.cc']
+elif arch == "jarch64":
+  vipc_sources += [f'{visionipc_dir.abspath}/visionbuf_jetson.cc']
 else:
   vipc_sources += [f'{visionipc_dir.abspath}/visionbuf_cl.cc']
 
 vipc_objects = env.SharedObject(vipc_sources)
 visionipc = env.Library('visionipc', vipc_objects)
 
-
+# Extra libs required by visionipc on each platform (exported for consumers)
+vipc_extra_libs = []
 vipc_frameworks = []
-vipc_libs = envCython["LIBS"] + [visionipc, msgq, common, "zmq"]
 if arch == "Darwin":
   vipc_frameworks.append('OpenCL')
+elif arch == "jarch64":
+  vipc_extra_libs += ['OpenCL', 'cudart']
 else:
-  vipc_libs.append('OpenCL')
+  vipc_extra_libs.append('OpenCL')
+
+vipc_libs = envCython["LIBS"] + [visionipc, msgq, common, "zmq"] + vipc_extra_libs
 envCython.Program(f'{visionipc_dir.abspath}/visionipc_pyx.so', f'{visionipc_dir.abspath}/visionipc_pyx.pyx',
                   LIBS=vipc_libs, FRAMEWORKS=vipc_frameworks)
 
@@ -45,4 +51,4 @@ if GetOption('extras'):
              [f'{visionipc_dir.abspath}/test_runner.cc', f'{visionipc_dir.abspath}/visionipc_tests.cc'],
               LIBS=['pthread'] + vipc_libs, FRAMEWORKS=vipc_frameworks)
 
-Export('visionipc', 'msgq', 'msgq_python')
+Export('visionipc', 'msgq', 'msgq_python', 'vipc_extra_libs')
