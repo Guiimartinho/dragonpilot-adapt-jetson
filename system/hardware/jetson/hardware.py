@@ -17,7 +17,7 @@ class Jetson(HardwareBase):
       return "JetPack unknown"
 
   def get_device_type(self):
-    return "jetson"
+    return "pc"  # capnp DeviceType has no "jetson"; use "pc" as closest match
 
   def reboot(self, reason=None):
     subprocess.check_output(["sudo", "reboot"])
