@@ -8,6 +8,7 @@ from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, DT_CTRL, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog
+from openpilot.system.hardware import JETSON
 
 from opendbc.car.car_helpers import interfaces
 from opendbc.car.vehicle_model import VehicleModel
@@ -238,7 +239,7 @@ class Controls:
 
 
 def main():
-  config_realtime_process(4, Priority.CTRL_HIGH)
+  config_realtime_process([1, 2] if JETSON else 4, Priority.CTRL_HIGH)
   controls = Controls()
   controls.run()
 

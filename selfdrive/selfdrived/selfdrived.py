@@ -22,7 +22,7 @@ from openpilot.selfdrive.selfdrived.state import StateMachine
 from openpilot.selfdrive.selfdrived.alertmanager import AlertManager, set_offroad_alert
 
 from openpilot.system.version import get_build_metadata
-from openpilot.system.hardware import HARDWARE
+from openpilot.system.hardware import HARDWARE, JETSON
 from opendbc.safety import ALTERNATIVE_EXPERIENCE
 
 REPLAY = "REPLAY" in os.environ
@@ -534,7 +534,7 @@ class SelfdriveD:
 
 
 def main():
-  config_realtime_process(4, Priority.CTRL_HIGH)
+  config_realtime_process([1, 2] if JETSON else 4, Priority.CTRL_HIGH)
   s = SelfdriveD()
   s.run()
 

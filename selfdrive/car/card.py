@@ -10,6 +10,7 @@ from cereal import car, log
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, Priority, Ratekeeper
 from openpilot.common.swaglog import cloudlog, ForwardingHandler
+from openpilot.system.hardware import JETSON
 
 from opendbc.car import DT_CTRL, structs
 from opendbc.car.can_definitions import CanData, CanRecvCallable, CanSendCallable
@@ -315,7 +316,7 @@ class Car:
 
 
 def main():
-  config_realtime_process(4, Priority.CTRL_HIGH)
+  config_realtime_process([1, 2] if JETSON else 4, Priority.CTRL_HIGH)
   car = Car()
   car.card_thread()
 
