@@ -29,8 +29,15 @@ def compile(onnx_file):
     inputs = {k:Tensor(v.numpy(), device=Device.DEFAULT).realize() if 'img' in k else v for k,v in inputs.items()}
   print("created tensors")
 
-  run_onnx_jit = TinyJit(lambda **kwargs:
-                         next(iter(run_onnx({k:v.to(Device.DEFAULT) for k,v in kwargs.items()}).values())).cast('float32'), prune=True)
+  # FP16 end-to-end on CUDA: keep native FP16 output to maximize Volta tensor core throughput.
+  # Cast to FP32 only at the numpy boundary (when .numpy() is called) to avoid wasting bandwidth.
+  # On non-CUDA devices, cast to FP32 for compatibility.
+  if getenv("FLOAT16") and Device.DEFAULT == "CUDA":
+    run_onnx_jit = TinyJit(lambda **kwargs:
+                           next(iter(run_onnx({k:v.to(Device.DEFAULT) for k,v in kwargs.items()}).values())), prune=True)
+  else:
+    run_onnx_jit = TinyJit(lambda **kwargs:
+                           next(iter(run_onnx({k:v.to(Device.DEFAULT) for k,v in kwargs.items()}).values())).cast('float32'), prune=True)
   for i in range(3):
     GlobalCounters.reset()
     print(f"run {i}")
