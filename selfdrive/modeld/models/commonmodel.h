@@ -2,6 +2,7 @@
 
 #include <cfloat>
 #include <cstdlib>
+#include <cstring>
 #include <cassert>
 
 #include <memory>
@@ -25,8 +26,23 @@ public:
   virtual ~ModelFrame() {}
   virtual cl_mem* prepare(cl_mem yuv_cl, int frame_width, int frame_height, int frame_stride, int frame_uv_offset, const mat3& projection) { return NULL; }
   uint8_t* buffer_from_cl(cl_mem *in_frames, int buffer_size) {
+#ifdef __JETSON__
+    // Jetson: async map avoids blocking GPU→CPU copy. Data stays accessible via unified memory.
+    cl_int map_err;
+    void* mapped = clEnqueueMapBuffer(q, *in_frames, CL_TRUE, CL_MAP_READ,
+                                      0, buffer_size, 0, nullptr, nullptr, &map_err);
+    if (map_err == CL_SUCCESS && mapped != nullptr) {
+      memcpy(input_frames.get(), mapped, buffer_size);
+      clEnqueueUnmapMemObject(q, *in_frames, mapped, 0, nullptr, nullptr);
+    } else {
+      // Fallback to standard read
+      CL_CHECK(clEnqueueReadBuffer(q, *in_frames, CL_TRUE, 0, buffer_size, input_frames.get(), 0, nullptr, nullptr));
+      clFinish(q);
+    }
+#else
     CL_CHECK(clEnqueueReadBuffer(q, *in_frames, CL_TRUE, 0, buffer_size, input_frames.get(), 0, nullptr, nullptr));
     clFinish(q);
+#endif
     return &input_frames[0];
   }
 

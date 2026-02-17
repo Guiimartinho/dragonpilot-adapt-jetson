@@ -5,6 +5,11 @@ if TICI:
   os.environ['DEV'] = 'QCOM'
 elif JETSON:
   os.environ['DEV'] = 'CUDA'
+  # CUDA optimizations for Jetson AGX Xavier
+  os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Async kernel launches
+  os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
+  os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+  os.environ.setdefault('FLOAT16', '1')  # Force FP16 for Volta tensor cores
 else:
   os.environ['DEV'] = 'CPU'
 USBGPU = "USBGPU" in os.environ
@@ -234,9 +239,11 @@ def main(demo=False):
   cloudlog.warning("modeld init")
 
   if not USBGPU:
-    # USB GPU currently saturates a core so can't do this yet,
-    # also need to move the aux USB interrupts for good timings
-    config_realtime_process(7, 54)
+    if JETSON:
+      # Jetson: pin modeld to cores 3-4 for CUDA inference, away from controlsd (1-2)
+      config_realtime_process([3, 4], 54)
+    else:
+      config_realtime_process(7, 54)
 
   st = time.monotonic()
   cloudlog.warning("setting up CL context")
@@ -372,6 +379,10 @@ def main(demo=False):
     prepare_only = vipc_dropped_frames > 0
     if prepare_only:
       cloudlog.error(f"skipping model eval. Dropped {vipc_dropped_frames} frames")
+      if JETSON and vipc_dropped_frames > 2:
+        # On Jetson: skip all GPU work when multiple frames dropped to avoid cascading delays
+        last_vipc_frame_id = meta_main.frame_id
+        continue
 
     bufs = {name: buf_extra if 'big' in name else buf_main for name in model.vision_input_names}
     transforms = {name: model_transform_extra if 'big' in name else model_transform_main for name in model.vision_input_names}

@@ -5,6 +5,8 @@ if TICI:
   os.environ['DEV'] = 'QCOM'
 elif JETSON:
   os.environ['DEV'] = 'CUDA'
+  os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
+  os.environ.setdefault('FLOAT16', '1')
 else:
   os.environ['DEV'] = 'CPU'
 from tinygrad.tensor import Tensor
@@ -111,7 +113,7 @@ def get_driverstate_packet(model_output, frame_id: int, location_ts: int, exec_t
 
 
 def main():
-  config_realtime_process(7, 5)
+  config_realtime_process(6 if JETSON else 7, 5)
 
   cl_context = CLContext()
   model = ModelState(cl_context)
