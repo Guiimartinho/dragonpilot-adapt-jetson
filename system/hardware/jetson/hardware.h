@@ -18,7 +18,8 @@ public:
   static cereal::InitData::DeviceType get_device_type() { return cereal::InitData::DeviceType::PC; }
 
   static std::string get_serial() {
-    std::string uid = util::read_file("/sys/module/tegra_fuse/parameters/tegra_chip_uid");
+    std::string uid = util::read_file("/sys/module/fuse_burn/parameters/tegra_chip_uid");
+    if (uid.empty()) uid = util::read_file("/sys/module/tegra_fuse/parameters/tegra_chip_uid");
     return uid.empty() ? "jetson-unknown" : util::strip(uid);
   }
 

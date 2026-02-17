@@ -29,11 +29,14 @@ class Jetson(HardwareBase):
     return ""
 
   def get_serial(self):
-    try:
-      with open("/sys/module/tegra_fuse/parameters/tegra_chip_uid") as f:
-        return f.read().strip()
-    except FileNotFoundError:
-      return "jetson-unknown"
+    for path in ["/sys/module/fuse_burn/parameters/tegra_chip_uid",
+                 "/sys/module/tegra_fuse/parameters/tegra_chip_uid"]:
+      try:
+        with open(path) as f:
+          return f.read().strip()
+      except FileNotFoundError:
+        continue
+    return "jetson-unknown"
 
   def get_network_info(self):
     return None
