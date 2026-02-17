@@ -26,7 +26,7 @@ try:
 except ImportError:
   Params = None
 
-_DEFAULT_FPS = int(os.getenv("FPS", {'tici': 20, 'tizi': 20}.get(HARDWARE.get_device_type(), 60)))
+_DEFAULT_FPS = int(os.getenv("FPS", 60))  # 60 FPS for all platforms including Jetson
 FPS_LOG_INTERVAL = 5  # Seconds between logging FPS drops
 FPS_DROP_THRESHOLD = 0.9  # FPS drop threshold for triggering a warning
 FPS_CRITICAL_THRESHOLD = 0.5  # Critical threshold for triggering strict actions
@@ -35,7 +35,7 @@ MAX_TOUCH_SLOTS = 2
 TOUCH_HISTORY_TIMEOUT = 3.0  # Seconds before touch points fade out
 
 BIG_UI = os.getenv("BIG", "0") == "1"
-ENABLE_VSYNC = os.getenv("ENABLE_VSYNC", "0") == "1"
+ENABLE_VSYNC = os.getenv("ENABLE_VSYNC", "1") == "1"  # VSync on by default for smooth rendering
 SHOW_FPS = os.getenv("SHOW_FPS") == "1"
 SHOW_TOUCHES = os.getenv("SHOW_TOUCHES") == "1"
 STRICT_MODE = os.getenv("STRICT_MODE") == "1"
@@ -272,14 +272,20 @@ class GuiApplication:
       self._set_log_callback()
       rl.set_trace_log_level(rl.TraceLogLevel.LOG_WARNING)
 
-      flags = rl.ConfigFlags.FLAG_MSAA_4X_HINT
+      # Jetson/TICI: fullscreen + VSync, no MSAA (saves 4x fragment work)
+      flags = 0
       if ENABLE_VSYNC:
         flags |= rl.ConfigFlags.FLAG_VSYNC_HINT
+      if not PC:  # Jetson/TICI: use fullscreen for lowest latency
+        flags |= rl.ConfigFlags.FLAG_FULLSCREEN_MODE
+        flags |= rl.ConfigFlags.FLAG_WINDOW_UNDECORATED
+      else:
+        flags |= rl.ConfigFlags.FLAG_MSAA_4X_HINT  # Only MSAA on PC (has GPU headroom)
       rl.set_config_flags(flags)
 
       rl.init_window(self._scaled_width, self._scaled_height, title)
 
-      needs_render_texture = self._scale != 1.0 or BURN_IN_MODE or RECORD
+      needs_render_texture = (self._scale != 1.0) or BURN_IN_MODE or RECORD  # Render texture needed when scale != 1.0 (Jetson, PC)
       if self._scale != 1.0:
         rl.set_mouse_scale(1 / self._scale, 1 / self._scale)
       if needs_render_texture:
