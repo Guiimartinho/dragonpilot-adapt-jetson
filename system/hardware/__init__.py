@@ -7,10 +7,14 @@ from openpilot.system.hardware.pc.hardware import Pc
 
 TICI = os.path.isfile('/TICI')
 AGNOS = os.path.isfile('/AGNOS')
-PC = not TICI
+JETSON = os.path.isfile('/JETSON')
+PC = not TICI and not JETSON
 
 
 if TICI:
   HARDWARE = cast(HardwareBase, Tici())
+elif JETSON:
+  from openpilot.system.hardware.jetson.hardware import Jetson
+  HARDWARE = cast(HardwareBase, Jetson())
 else:
   HARDWARE = cast(HardwareBase, Pc())

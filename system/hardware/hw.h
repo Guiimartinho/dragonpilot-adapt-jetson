@@ -8,6 +8,9 @@
 #if __TICI__
 #include "system/hardware/tici/hardware.h"
 #define Hardware HardwareTici
+#elif __JETSON__
+#include "system/hardware/jetson/hardware.h"
+#define Hardware HardwareJetson
 #else
 #include "system/hardware/pc/hardware.h"
 #define Hardware HardwarePC
