@@ -19,6 +19,11 @@
 
 **Bringing DragonPilot's autonomous driving capabilities to NVIDIA Jetson hardware.**
 
+### Running on Jetson AGX Xavier
+
+![DragonPilot running on Jetson AGX Xavier](docs/jetson/assets/ui_running_on_jetson.png)
+*DragonPilot UI with real-time CUDA inference on Jetson AGX Xavier — driving_vision 8.7ms, driving_policy 3.3ms, dmonitoring 6.5ms (~19ms total)*
+
 ## About This Project
 
 This is an adaptation of [DragonPilot](https://github.com/dragonpilot-community/dragonpilot) 0.10.3 to run on the **NVIDIA Jetson AGX Xavier** platform. DragonPilot is a community fork of [openpilot](https://github.com/commaai/openpilot), originally designed for comma.ai hardware (Snapdragon 845).
@@ -158,11 +163,12 @@ dragonpilot-adapt-jetson/
 
 | Model | Inference Time | Notes |
 |-------|---------------|-------|
-| driving_vision (50.3M) | ~46ms | 122 CUDA kernels, batched |
-| driving_policy (7.0M) | ~13ms | 78 CUDA kernels |
-| dmonitoring_model (9.6M) | ~7ms | Smallest model |
+| driving_vision (50.3M) | **~8.7ms** | CUDA FP16, Volta tensor cores |
+| driving_policy (7.0M) | **~3.3ms** | CUDA FP16 |
+| dmonitoring_model (9.6M) | **~6.5ms** | CUDA FP16 |
+| **Total** | **~19ms** | Well under 50ms real-time target |
 
-All models compiled with `DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=0` via tinygrad.
+All models compiled with `DEV=CUDA FLOAT16=1 CUDA_OPT=1 JIT_BATCH_SIZE=0` via tinygrad.
 
 ## Credits
 
@@ -191,6 +197,11 @@ MIT License (same as openpilot). See [LICENSE](LICENSE).
 ![tinygrad](https://img.shields.io/badge/Inferencia-tinygrad_CUDA-orange)
 
 **Trazendo as capacidades de direcao autonoma do DragonPilot para hardware NVIDIA Jetson.**
+
+### Rodando na Jetson AGX Xavier
+
+![DragonPilot rodando na Jetson AGX Xavier](docs/jetson/assets/ui_running_on_jetson.png)
+*UI do DragonPilot com inferencia CUDA em tempo real na Jetson AGX Xavier — driving_vision 8.7ms, driving_policy 3.3ms, dmonitoring 6.5ms (~19ms total)*
 
 ## Sobre Este Projeto
 
@@ -314,11 +325,12 @@ USE_WEBCAM=1 python3 -c "from openpilot.system.manager.manager import main; main
 
 | Modelo | Tempo de Inferencia | Notas |
 |--------|---------------------|-------|
-| driving_vision (50.3M) | ~46ms | 122 kernels CUDA, batched |
-| driving_policy (7.0M) | ~13ms | 78 kernels CUDA |
-| dmonitoring_model (9.6M) | ~7ms | Modelo menor |
+| driving_vision (50.3M) | **~8.7ms** | CUDA FP16, tensor cores Volta |
+| driving_policy (7.0M) | **~3.3ms** | CUDA FP16 |
+| dmonitoring_model (9.6M) | **~6.5ms** | CUDA FP16 |
+| **Total** | **~19ms** | Bem abaixo do target de 50ms |
 
-Todos os modelos compilados com `DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=0` via tinygrad.
+Todos os modelos compilados com `DEV=CUDA FLOAT16=1 CUDA_OPT=1 JIT_BATCH_SIZE=0` via tinygrad.
 
 ## Aviso de Seguranca
 
