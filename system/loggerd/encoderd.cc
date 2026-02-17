@@ -6,11 +6,13 @@
 #ifdef __TICI__
 #include "system/loggerd/encoder/v4l_encoder.h"
 #define Encoder V4LEncoder
+#elif defined(__JETSON__)
+#include "system/loggerd/encoder/nvenc_encoder.h"
+#define Encoder NvencEncoder
 #else
 #include "system/loggerd/encoder/ffmpeg_encoder.h"
 #define Encoder FfmpegEncoder
 #endif
-// __JETSON__ uses FfmpegEncoder via the #else path above (NVENC acceleration via ffmpeg)
 
 ExitHandler do_exit;
 
