@@ -6,6 +6,7 @@ This directory contains all documentation for porting DragonPilot 0.10.3 to the 
 
 | Document | Description |
 |----------|-------------|
+| [Setup Guide](SETUP_GUIDE.md) | Complete step-by-step guide to build and run without errors |
 | [Porting Plan](PORTING_PLAN.md) | Complete phased plan for the port (Phases 0-7) |
 | [Architecture Analysis](ARCHITECTURE_ANALYSIS.md) | Hardware abstraction, build system, GPU pipeline analysis |
 | [File Inventory](FILE_INVENTORY.md) | All files to modify/create with details |

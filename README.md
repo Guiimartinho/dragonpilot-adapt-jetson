@@ -1,74 +1,220 @@
 ![](dragonpilot/selfdrive/assets/dragonpilot.png)
 
-[Read this in English](README_EN.md)
+[Leia em Portugues](#portuguese) | [Read in English](#english) | [DragonPilot Original (Chinese)](https://github.com/dragonpilot-community/dragonpilot) | [DragonPilot Original (English)](README_EN.md)
 
-# **🐲 dragonpilot - 賦予您的愛車「龍」之魂**
+---
 
-**我們與您一同翱翔於更智慧、更貼心的駕駛旅程。**
+<a name="english"></a>
 
-## **👋 嘿, 朋友，歡迎您的到來！**
+# DragonPilot - Jetson AGX Xavier Adaptation
 
-`dragonpilot` 誕生於 2019 年，由三位早期的 openpilot 華人玩家共同創立。初衷很簡單：為廣大的華人用戶、玩家們提供一個友善的交流環境、更簡便的設定協助，並加入更多適合在地使用的貼心功能。
+**Bringing DragonPilot's autonomous driving capabilities to NVIDIA Jetson hardware.**
 
-我們深知在地化的重要性，特別是語言的親切感。因此，我們率先導入了完整的中文介面，讓 `dragonpilot` 迅速在華語地區累積了口碑，也讓華人的使用者數量在全球名列前茅。這份來自在地的支持，是我們持續前進的最大動力。
+## About This Project
 
-我們以功能強大的 [openpilot](https://github.com/commaai/openpilot) 為基礎——這套據美國消費者報告評測優於市售車方案的開源輔助駕駛系統——融入了更多在地化的巧思與客製化的溫度，希望能打造出最符合您需求的駕駛夥伴。(您也可以參考我們 repo 中保留的 [openpilot 原始說明檔案](README_OPENPILOT.md))
+This is an adaptation of [DragonPilot](https://github.com/dragonpilot-community/dragonpilot) 0.10.3 to run on the **NVIDIA Jetson AGX Xavier** platform. DragonPilot is a community fork of [openpilot](https://github.com/commaai/openpilot), originally designed for comma.ai hardware (Snapdragon 845).
 
-取名 `dragonpilot`，是因為我們希望它能像神話中的「龍」一樣，既強大又充滿智慧，為您的行車安全保駕護航。龍，在我們華人文化中，更是吉祥與力量的象徵，也代表著我們的根源與驕傲。
+This project preserves the full DragonPilot history and features while adding native Jetson support.
 
-## **✨ dragonpilot 的里程碑**
+## Why Jetson?
 
-我們不僅保留了 openpilot 的核心優勢，更達成了許多從社群回饋中誕生的里程碑，這些是我們引以為傲的足跡：
+| Feature | comma 3X (Tici) | Jetson AGX Xavier |
+|---------|----------------|-------------------|
+| AI Performance | ~6 TOPS | **32 TOPS** |
+| RAM | 4 GB | **32 GB** |
+| GPU | Adreno 630 (OpenCL) | **512 CUDA + 64 Tensor Cores (Volta)** |
+| Tensor Cores | None | **64 (FP16/INT8)** |
+| Storage | 64 GB eMMC | **NVMe SSD (expandable)** |
 
-* **🚘 全時置中車道維持 (ALKA)**
+The Jetson AGX Xavier offers **5x the AI performance** with **8x the RAM**, making it suitable for more advanced models and future development.
 
-  這不只是一個功能，更是 `dragonpilot` 的哲學。我們最早於 [0.6.2 版本](https://github.com/dragonpilot-community/dragonpilot/blob/2861467183d62151024320447ba04d18fc3fe1e6/selfdrive/car/toyota/carstate.py#L199) 時便實現了這個功能，其開發歷程始於 2017 Lexus IS300h，接著擴展至 Toyota 全車系，並逐步延伸到其他支援的品牌。它能溫柔地輔助您，讓車輛始終穩定地保持在車道中央，提供一份額外的安心與從容。
+## Key Adaptations
 
-* **🌐 率先導入多國語言介面**
+- **Platform Identity**: New `jarch64` architecture with `-D__JETSON__` compile flag
+- **GPU Compute**: Qualcomm QCOM/Adreno -> NVIDIA CUDA (Volta sm_72)
+- **Model Inference**: tinygrad `DEV=QCOM` -> `DEV=CUDA` with FP16 support
+- **Camera**: Qualcomm Spectra ISP -> USB webcam / MIPI CSI-2
+- **Memory**: ION allocator -> Standard OpenCL `visionbuf_cl.cc`
+- **Hardware Class**: New `Jetson` class with thermal, power, and fan management
 
-  在官方 openpilot 還未支援前，我們便已將多國語言介面實現。`dragonpilot` 完整支援繁體中文、簡體中文與英文，讓操作毫無隔閡。
+## Preserved Features
 
-* **💻 唯一同時支援多硬體平台**
+All DragonPilot features are preserved:
+- ALKA (Always-on Lane Keeping Assist)
+- ACM (Adaptive Coasting Mode)
+- AEM (Adaptive Experimental Mode)
+- DTSC (Dynamic Turn Speed Control)
+- RED (Road Edge Detection)
+- Full multilingual support (Chinese, English, Portuguese)
+- 300+ supported vehicles
 
-  我們是唯一曾致力於讓專案同時兼容 EON、comma two、comma 3 與 Jetson 平台的社群分支，這份努力是為了服務最廣大的玩家社群。
-  此外，在 comma.ai 團隊於 0.10.0 版本宣布停止支持 comma 3 後，我們仍是唯一一個完整同時支援 comma 3、comma 3X 以及 O3、O3L、O3XL（O3 系列為副廠硬體）的社群分支。
+## Documentation
 
-* **📜 曾榮獲官方認證第一大分支**
+- [Setup Guide](docs/jetson/SETUP_GUIDE.md) - Complete step-by-step guide to build and run
+- [Porting Plan](docs/jetson/PORTING_PLAN.md) - Complete phased implementation plan
+- [Architecture Analysis](docs/jetson/ARCHITECTURE_ANALYSIS.md) - Platform analysis and GPU pipeline
+- [File Inventory](docs/jetson/FILE_INVENTORY.md) - All files to modify/create
+- [Hardware Specs](docs/jetson/HARDWARE_SPECS.md) - Jetson AGX Xavier specifications
 
-  基於活躍的社群與功能創新，`dragonpilot` 曾一度成長為 comma ai 官方認證的第一大 openpilot 分支，這份榮耀屬於每一位參與者。
+## Quick Start (on Jetson)
 
-## **🧑‍💻 設計理念 - 少即是多 (Less is More)**
+See the full [Setup Guide](docs/jetson/SETUP_GUIDE.md) for detailed instructions.
 
-隨著 openpilot 的 AI 模型日益強大，許多過去需要手動微調的功能，現在都已能透過更先進的模型來實現。因此，我們現在的開發重心回歸到 **「最小化修改」(minimal changes)** 的核心原則上。
+```bash
+# 1. Clone this repo
+git clone git@github.com:Guiimartinho/dragonpilot-adapt-jetson.git /data/openpilot
+cd /data/openpilot
 
-我們的目標是為您提供最純粹、最接近官方的 openpilot 駕駛感受，同時保留 `dragonpilot` 那些經過時間考驗、最受社群喜愛的經典功能。我們相信，在強大的 AI 基礎上，簡潔即是力量。
+# 2. Create platform marker
+sudo touch /JETSON
 
-## **🛠️ 硬件的足跡 - 一路走來的夥伴們**
+# 3. Setup Python 3.11 environment
+sudo apt install python3.11 python3.11-dev python3.11-venv
+python3.11 -m venv /data/openpilot_venv
+source /data/openpilot_venv/bin/activate
 
-從最早的 **EON**，到官方的 **comma two / three (C2/C3/C3X)**，再到社群中各式各樣充滿智慧的**副廠機 (如 C1.5, O2, O3, O3L, O3XL 等)**，甚至我們也曾探索過在 [**Jetson Xavier NX**](https://github.com/eFiniLan/xnxpilot) 上的可能性。
+# 4. Install dependencies
+pip install -e '.[dev]'
+scons -j8
 
-目前最新版本主要支援： comma3 / 3X 以及 O3 / O3L / O3XL 等社群硬體。
-針對 EON / C1.5 / C2 等舊款硬體，最後支援的版本位於 [d2 分支](https://github.com/dragonpilot-community/dragonpilot/tree/d2)。
-無論您手上是哪一款設備，都代表著您對開源駕駛輔助的一份熱情。
+# 5. Run (with USB webcam)
+USE_WEBCAM=1 python -m selfdrive.manager.manager
+```
 
-## **🫂 加入我們，成為「尋龍者」的一份子**
+## Hardware Requirements
 
-`dragonpilot` 的成長，離不開每一位使用者的貢獻與回饋。我們是一個以**公開、透明**為原則的溫暖社群，希望在這裡能與所有對 openpilot / dragonpilot 有興趣的用戶分享、交流開發與使用上的經驗。
+- **NVIDIA Jetson AGX Xavier** (32GB recommended)
+- JetPack 5.x (CUDA 11.4+)
+- NVMe SSD (recommended for storage)
+- USB webcam (for initial testing) or MIPI CSI-2 camera
+- [comma Panda](https://comma.ai/shop/panda) (for vehicle communication)
+- Car harness for your supported vehicle
 
-[**歡迎加入我們的 Facebook 社團進行交流！**](https://www.facebook.com/groups/930190251238639)
+## Project Structure
 
-## **❤️ 特別感謝**
+```
+dragonpilot-adapt-jetson/
+  docs/jetson/          <- Jetson-specific documentation
+  system/hardware/
+    jetson/             <- NEW: Jetson hardware abstraction
+      hardware.py       <- Jetson hardware class
+      hardware.h        <- C++ hardware class
+      fan_controller.py <- Fan management
+    tici/               <- Original comma hardware (preserved)
+    pc/                 <- PC/simulation (preserved)
+  selfdrive/modeld/     <- Model inference (CUDA adaptation)
+  SConstruct            <- Build system (jarch64 support)
+```
 
-`dragonpilot` 從創立至今，從未打算透過 Patreon 等平台進行任何形式的募資。我們的初衷是建立一個讓大家能一起學習、一起成長的社群。It's all about fun, not money.
+## Credits
 
-然而，我們仍要對那些自發性支持本專案的朋友們，致上最誠摯的感謝。正是因為有您們的鼓勵，我們才有更大的動力持續前進。
+- [DragonPilot Community](https://github.com/dragonpilot-community/dragonpilot) - Original project
+- [comma.ai / openpilot](https://github.com/commaai/openpilot) - Base platform
+- [xnxpilot](https://github.com/eFiniLan/xnxpilot) - Prior art for Jetson porting (openpilot 0.8.9)
+- [tinygrad](https://github.com/tinygrad/tinygrad) - ML inference engine with CUDA support
 
-[**我們的贊助者名單**](SPONSORS.md)
+## License
 
-### **安全聲明**
+MIT License (same as openpilot). See [LICENSE](LICENSE).
 
-`dragonpilot` 是一種駕駛**輔助**系統，並非全自動駕駛。它旨在減輕您的駕駛疲勞，提升行車安全，但駕駛人仍需時刻保持專注，並隨時準備接管車輛。請務必遵守您所在地區的交通法規。
+---
 
-**最後，再次感謝您的到來。**
+<a name="portuguese"></a>
 
-**期待與您一同在智慧駕駛的道路上，乘「龍」而行！**
+# DragonPilot - Adaptacao para Jetson AGX Xavier
+
+**Trazendo as capacidades de direcao autonoma do DragonPilot para hardware NVIDIA Jetson.**
+
+## Sobre Este Projeto
+
+Esta e uma adaptacao do [DragonPilot](https://github.com/dragonpilot-community/dragonpilot) 0.10.3 para rodar nativamente na plataforma **NVIDIA Jetson AGX Xavier**. O DragonPilot e um fork comunitario do [openpilot](https://github.com/commaai/openpilot), originalmente projetado para hardware comma.ai (Snapdragon 845).
+
+Este projeto preserva todo o historico e funcionalidades do DragonPilot, adicionando suporte nativo para Jetson.
+
+## Por que Jetson?
+
+| Caracteristica | comma 3X (Tici) | Jetson AGX Xavier |
+|----------------|----------------|-------------------|
+| Performance IA | ~6 TOPS | **32 TOPS** |
+| RAM | 4 GB | **32 GB** |
+| GPU | Adreno 630 (OpenCL) | **512 CUDA + 64 Tensor Cores (Volta)** |
+| Tensor Cores | Nenhum | **64 (FP16/INT8)** |
+| Armazenamento | 64 GB eMMC | **NVMe SSD (expansivel)** |
+
+O Jetson AGX Xavier oferece **5x a performance de IA** com **8x a RAM**, tornando-o adequado para modelos mais avancados e desenvolvimento futuro.
+
+## Adaptacoes Principais
+
+- **Identidade de Plataforma**: Nova arquitetura `jarch64` com flag `-D__JETSON__`
+- **GPU Compute**: Qualcomm QCOM/Adreno -> NVIDIA CUDA (Volta sm_72)
+- **Inferencia de Modelos**: tinygrad `DEV=QCOM` -> `DEV=CUDA` com suporte FP16
+- **Camera**: Qualcomm Spectra ISP -> Webcam USB / MIPI CSI-2
+- **Memoria**: Alocador ION -> OpenCL padrao `visionbuf_cl.cc`
+- **Classe Hardware**: Nova classe `Jetson` com gerenciamento termico, energia e ventilador
+
+## Funcionalidades Preservadas
+
+Todas as funcionalidades do DragonPilot sao preservadas:
+- ALKA (Assistencia de Manutencao de Faixa Sempre Ativa)
+- ACM (Modo de Coasting Adaptativo)
+- AEM (Modo Experimental Adaptativo)
+- DTSC (Controle Dinamico de Velocidade em Curvas)
+- RED (Deteccao de Borda de Pista)
+- Suporte multilinguistico completo
+- 300+ veiculos suportados
+
+## Documentacao
+
+- [Guia de Setup](docs/jetson/SETUP_GUIDE.md) - Guia completo passo-a-passo para compilar e rodar
+- [Plano de Port](docs/jetson/PORTING_PLAN.md) - Plano completo de implementacao por fases
+- [Analise de Arquitetura](docs/jetson/ARCHITECTURE_ANALYSIS.md) - Analise de plataforma e pipeline GPU
+- [Inventario de Arquivos](docs/jetson/FILE_INVENTORY.md) - Todos os arquivos a modificar/criar
+- [Specs do Hardware](docs/jetson/HARDWARE_SPECS.md) - Especificacoes do Jetson AGX Xavier
+
+## Inicio Rapido (na Jetson)
+
+Veja o [Guia de Setup](docs/jetson/SETUP_GUIDE.md) completo para instrucoes detalhadas.
+
+```bash
+# 1. Clonar este repo
+git clone git@github.com:Guiimartinho/dragonpilot-adapt-jetson.git /data/openpilot
+cd /data/openpilot
+
+# 2. Criar marker de plataforma
+sudo touch /JETSON
+
+# 3. Configurar ambiente Python 3.11
+sudo apt install python3.11 python3.11-dev python3.11-venv
+python3.11 -m venv /data/openpilot_venv
+source /data/openpilot_venv/bin/activate
+
+# 4. Instalar dependencias
+pip install -e '.[dev]'
+scons -j8
+
+# 5. Rodar (com webcam USB)
+USE_WEBCAM=1 python -m selfdrive.manager.manager
+```
+
+## Requisitos de Hardware
+
+- **NVIDIA Jetson AGX Xavier** (32GB recomendado)
+- JetPack 5.x (CUDA 11.4+)
+- SSD NVMe (recomendado)
+- Webcam USB (para teste inicial) ou camera MIPI CSI-2
+- [comma Panda](https://comma.ai/shop/panda) (para comunicacao veicular)
+- Chicote para seu veiculo suportado
+
+## Aviso de Seguranca
+
+DragonPilot e um sistema de **assistencia** ao motorista, nao direcao autonoma completa. Voce deve permanecer alerta e pronto para assumir o controle a qualquer momento. Siga sempre as leis de transito locais.
+
+## Creditos
+
+- [Comunidade DragonPilot](https://github.com/dragonpilot-community/dragonpilot) - Projeto original
+- [comma.ai / openpilot](https://github.com/commaai/openpilot) - Plataforma base
+- [xnxpilot](https://github.com/eFiniLan/xnxpilot) - Referencia para port Jetson (openpilot 0.8.9)
+
+## Licenca
+
+MIT License (mesma do openpilot). Veja [LICENSE](LICENSE).
