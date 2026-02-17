@@ -32,8 +32,11 @@ if platform.system() == "Darwin":
   brew_prefix = subprocess.check_output(['brew', '--prefix'], encoding='utf8').strip()
 elif arch == "aarch64" and os.path.isfile('/TICI'):
   arch = "larch64"
+elif arch == "aarch64" and os.path.isfile('/JETSON'):
+  arch = "jarch64"
 assert arch in [
   "larch64",  # linux tici arm64
+  "jarch64",  # linux jetson arm64
   "aarch64",  # linux pc arm64
   "x86_64",   # linux pc x64
   "Darwin",   # macOS arm64 (x86 not supported)
@@ -104,6 +107,19 @@ if arch == "larch64":
   arch_flags = ["-D__TICI__", "-mcpu=cortex-a57"]
   env.Append(CCFLAGS=arch_flags)
   env.Append(CXXFLAGS=arch_flags)
+elif arch == "jarch64":
+  env.Append(CPPPATH=[
+    "#third_party/opencl/include",
+    "/usr/local/cuda/include",
+  ])
+  env.Append(LIBPATH=[
+    "/usr/local/lib",
+    "/usr/lib/aarch64-linux-gnu",
+    "/usr/local/cuda/lib64",
+  ])
+  arch_flags = ["-D__JETSON__", "-mcpu=cortex-a57"]
+  env.Append(CCFLAGS=arch_flags)
+  env.Append(CXXFLAGS=arch_flags)
 elif arch == "Darwin":
   env.Append(LIBPATH=[
     f"{brew_prefix}/lib",
@@ -168,7 +184,7 @@ Export('envCython', 'np_version')
 Export('env', 'arch')
 
 # Setup cache dir
-cache_dir = '/data/scons_cache' if arch == "larch64" else '/tmp/scons_cache'
+cache_dir = '/data/scons_cache' if arch in ("larch64", "jarch64") else '/tmp/scons_cache'
 CacheDir(cache_dir)
 Clean(["."], cache_dir)
 
@@ -217,7 +233,7 @@ SConscript(['selfdrive/SConscript'])
 
 if Dir('#tools/cabana/').exists() and GetOption('extras'):
   SConscript(['tools/replay/SConscript'])
-  if arch != "larch64":
+  if arch not in ("larch64", "jarch64"):
     SConscript(['tools/cabana/SConscript'])
 
 
