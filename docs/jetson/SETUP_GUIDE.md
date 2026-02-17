@@ -1,146 +1,139 @@
 # Guia Completo de Setup: DragonPilot na Jetson AGX Xavier
 
-Guia passo-a-passo para compilar e rodar o DragonPilot 0.10.3 na Jetson AGX Xavier sem erros.
+Guia passo-a-passo **testado e validado** para compilar e rodar o DragonPilot 0.10.3 na Jetson AGX Xavier.
 
-**Hardware**: Jetson AGX Xavier 32GB, JetPack 5.1.4 (Ubuntu 20.04, CUDA 11.4)
+**Hardware**: Jetson AGX Xavier 32GB, JetPack 5.x (R35.6.2, Ubuntu 20.04, CUDA 11.4)
+
+> **Nota**: Todos os passos abaixo foram validados em uma Jetson AGX Xavier real rodando JetPack R35.6.2.
 
 ---
 
 ## Passo 1: Preparar o NVMe e Diretorio de Trabalho
 
-```bash
-# Verificar que o NVMe esta montado (deve estar em /home ou /data)
-df -h /home
+A eMMC interna da Jetson tem apenas **28GB** e e insuficiente para o build. Use um NVMe SSD.
 
-# Criar diretorio de trabalho no NVMe
-sudo mkdir -p /data
-sudo chown $USER:$USER /data
+```bash
+# Verificar que o NVMe esta montado (tipicamente em /home)
+df -h /home
+# Deve mostrar /dev/nvme0n1p1 com centenas de GB livres
+
+# Criar /data como symlink para o NVMe
+sudo ln -s /home/$USER /data
+
+# Verificar
+ls -la /data
+# Deve apontar para /home/xavier (ou seu usuario)
 ```
 
 ---
 
-## Passo 2: Instalar Python 3.11
+## Passo 2: Configurar o Sistema
+
+```bash
+# Configurar sudo sem senha (necessario para jetson_clocks, nvpmodel, etc.)
+echo "$USER ALL=(ALL) NOPASSWD: ALL" | sudo tee /etc/sudoers.d/$USER
+
+# Configurar limites de real-time scheduling
+echo "$USER - rtprio 99" | sudo tee -a /etc/security/limits.conf
+echo "$USER - memlock unlimited" | sudo tee -a /etc/security/limits.conf
+echo "$USER - nice -20" | sudo tee -a /etc/security/limits.conf
+
+# Adicionar CUDA ao PATH
+echo 'export PATH=/usr/local/cuda/bin:$PATH' >> ~/.bashrc
+echo 'export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH' >> ~/.bashrc
+
+# Criar diretorio tmp no NVMe (evita encher a eMMC)
+mkdir -p /home/$USER/tmp
+echo 'export TMPDIR=/home/$USER/tmp' >> ~/.bashrc
+
+# Aplicar
+source ~/.bashrc
+```
+
+---
+
+## Passo 3: Criar Marker de Plataforma
+
+```bash
+sudo touch /JETSON
+```
+
+Este arquivo e detectado pelo `system/hardware/__init__.py` e `SConstruct` para ativar o modo Jetson (`jarch64`). Sem ele, o sistema roda em modo PC.
+
+---
+
+## Passo 4: Instalar Dependencias de Sistema (apt)
+
+```bash
+sudo apt-get update
+
+# Compilador, ferramentas e todas as bibliotecas
+sudo apt-get install -y \
+  build-essential git wget curl cmake pkg-config gettext \
+  clang \
+  gcc-arm-none-eabi \
+  libzmq3-dev \
+  libcapnp-dev capnproto \
+  libusb-1.0-0-dev \
+  ffmpeg libavformat-dev libavcodec-dev libavutil-dev libswscale-dev \
+  opencl-headers ocl-icd-opencl-dev ocl-icd-libopencl1 clinfo \
+  pocl-opencl-icd libpocl2 \
+  libglfw3-dev libglew-dev libgles2-mesa-dev \
+  portaudio19-dev \
+  libeigen3-dev \
+  libsqlite3-dev \
+  libzstd-dev libbz2-dev \
+  libffi-dev libssl-dev \
+  zlib1g-dev libncurses5-dev libncursesw5-dev \
+  libreadline-dev libgdbm-dev liblzma-dev \
+  tk-dev uuid-dev \
+  libnlopt-dev
+
+# Limpar cache apt (economiza espaco na eMMC)
+sudo apt-get clean
+```
+
+### Notas Importantes
+
+- **clang**: O SConstruct usa `clang/clang++` como compilador (nao gcc).
+- **gcc-arm-none-eabi**: Necessario para compilar o firmware do Panda.
+- **pocl-opencl-icd**: A Jetson **NAO** tem driver NVIDIA OpenCL. O POCL (Portable Computing Language) fornece OpenCL via CPU, suficiente para o preprocessing de imagens do VisionIPC.
+- **gettext**: Necessario para `msgfmt` (compilacao de traducoes da UI).
+
+---
+
+## Passo 5: Compilar e Instalar Python 3.11
 
 O JetPack 5.x vem com Python 3.8. O DragonPilot exige **Python >= 3.11, < 3.13**.
 
+> **Importante**: O PPA `deadsnakes` NAO tem pacotes para `arm64` no Ubuntu 20.04. E necessario compilar do source.
+
 ```bash
-sudo add-apt-repository ppa:deadsnakes/ppa
-sudo apt update
-sudo apt install -y python3.11 python3.11-dev python3.11-venv python3.11-distutils
+cd /tmp
+wget https://www.python.org/ftp/python/3.11.11/Python-3.11.11.tar.xz
+tar xf Python-3.11.11.tar.xz
+cd Python-3.11.11
+
+# Configurar (sem --enable-optimizations para build mais rapido)
+./configure --prefix=/usr/local
+
+# Compilar com 8 cores (~5 minutos)
+make -j8
+
+# Instalar (altinstall para nao substituir o python3 do sistema)
+sudo make altinstall
+
+# Limpar
+cd ~ && rm -rf /tmp/Python-3.11*
 
 # Verificar
 python3.11 --version
-# Deve retornar: Python 3.11.x
+# Deve retornar: Python 3.11.11
 ```
 
 ---
 
-## Passo 3: Instalar Dependencias de Sistema (apt)
-
-### 3.1 Compilador e Ferramentas Essenciais
-
-```bash
-sudo apt install -y \
-  clang \
-  build-essential \
-  ca-certificates \
-  curl \
-  git \
-  git-lfs \
-  gettext \
-  locales
-```
-
-**IMPORTANTE**: O projeto usa `clang/clang++` como compilador (nao gcc). O `SConstruct` tem `CC='clang', CXX='clang++'` hardcoded.
-
-### 3.2 Bibliotecas C/C++ (Build)
-
-```bash
-sudo apt install -y \
-  libssl-dev \
-  libcurl4-openssl-dev \
-  libzmq3-dev \
-  libcapnp-dev \
-  capnproto \
-  libusb-1.0-0-dev \
-  libzstd-dev \
-  libsqlite3-dev \
-  libffi-dev \
-  libbz2-dev \
-  libeigen3-dev \
-  libglib2.0-0 \
-  libjpeg-dev \
-  libncurses5-dev \
-  libi2c-dev
-```
-
-### 3.3 FFmpeg (Encoder de Video)
-
-```bash
-sudo apt install -y \
-  ffmpeg \
-  libavformat-dev \
-  libavcodec-dev \
-  libavdevice-dev \
-  libavutil-dev \
-  libavfilter-dev
-```
-
-### 3.4 OpenCL
-
-```bash
-sudo apt install -y \
-  opencl-headers \
-  ocl-icd-libopencl1 \
-  ocl-icd-opencl-dev \
-  clinfo
-```
-
-**Verificar OpenCL**:
-```bash
-clinfo | head -20
-# Deve mostrar: "NVIDIA CUDA" como plataforma, "Xavier" como device
-```
-
-O JetPack 5.x ja inclui o driver NVIDIA OpenCL 1.2. O `ocl-icd` e o loader que conecta ao driver NVIDIA.
-
-### 3.5 OpenGL / EGL (UI)
-
-```bash
-sudo apt install -y \
-  libgles2-mesa-dev \
-  libglfw3-dev
-```
-
-### 3.6 Audio
-
-```bash
-sudo apt install -y portaudio19-dev
-```
-
-### 3.7 Panda Firmware (cross-compiler ARM)
-
-```bash
-sudo apt install -y gcc-arm-none-eabi
-```
-
-### 3.8 Qt5 (Opcional - ferramentas cabana/replay)
-
-```bash
-sudo apt install -y \
-  qtbase5-dev \
-  qtbase5-dev-tools \
-  qttools5-dev-tools \
-  libqt5charts5-dev \
-  libqt5svg5-dev \
-  libqt5serialbus5-dev \
-  libqt5x11extras5-dev \
-  libqt5opengl5-dev
-```
-
----
-
-## Passo 4: Verificar CUDA
+## Passo 6: Verificar CUDA
 
 CUDA ja vem instalado com o JetPack. Verificar:
 
@@ -150,128 +143,74 @@ nvcc --version
 
 ls /usr/local/cuda/lib64/libcudart.so
 # Deve existir
-
-# Testar compilacao CUDA
-cat > /tmp/test_cuda.cu << 'EOF'
-#include <stdio.h>
-__global__ void hello() { printf("CUDA OK!\n"); }
-int main() { hello<<<1,1>>>(); cudaDeviceSynchronize(); return 0; }
-EOF
-nvcc /tmp/test_cuda.cu -o /tmp/test_cuda && /tmp/test_cuda
-# Deve imprimir: CUDA OK!
-rm /tmp/test_cuda /tmp/test_cuda.cu
 ```
 
 ---
 
-## Passo 5: Clonar o Repositorio
+## Passo 7: Verificar OpenCL
+
+```bash
+clinfo | head -10
+# Deve mostrar:
+#   Number of platforms: 1
+#   Platform Name: Portable Computing Language
+#   ...
+#   Device Name: pthread-0x004
+#   Max compute units: 8
+```
+
+> **Nota**: A plataforma OpenCL sera POCL (CPU), nao NVIDIA. Isso e correto - o OpenCL e usado apenas para preprocessing de imagens (loadyuv, transform), enquanto a inferencia dos modelos usa CUDA via tinygrad.
+
+---
+
+## Passo 8: Clonar o Repositorio
 
 ```bash
 cd /data
-git clone git@github.com:Guiimartinho/dragonpilot-adapt-jetson.git openpilot
+git clone --recurse-submodules -b development \
+  git@github.com:Guiimartinho/dragonpilot-adapt-jetson.git openpilot
 cd openpilot
-git checkout development
+
+# Se os submodules nao foram clonados automaticamente:
 git submodule update --init --recursive
 ```
 
 ---
 
-## Passo 6: Criar Marker de Plataforma
+## Passo 9: Criar Ambiente Virtual Python e Instalar Dependencias
 
 ```bash
-sudo touch /JETSON
-```
+cd /data/openpilot
 
-Este arquivo e detectado pelo `system/hardware/__init__.py` e `SConstruct` para ativar o modo Jetson. Sem ele, o sistema roda em modo PC.
-
----
-
-## Passo 7: Criar Ambiente Virtual Python
-
-```bash
-python3.11 -m venv /data/openpilot_venv
-source /data/openpilot_venv/bin/activate
-
-# Verificar que esta usando Python 3.11
-python --version
-# Deve retornar: Python 3.11.x
+# Criar venv
+python3.11 -m venv .venv
+source .venv/bin/activate
 
 # Atualizar pip
 pip install --upgrade pip setuptools wheel
+
+# Instalar dependencias principais
+pip install -e .
+
+# Instalar submodules
+pip install -e msgq_repo/
+pip install -e opendbc_repo/
+pip install -e panda/
+pip install -e tinygrad_repo/
+
+# Dependencias adicionais (nao listadas em pyproject.toml mas necessarias)
+pip install opencv-python-headless  # webcamerad
+pip install Pillow                   # UI emoji/text rendering
+pip install jeepney                  # DBus/WiFi manager
+pip install dbus-next                # DBus async
 ```
 
-**IMPORTANTE**: Sempre ative o venv antes de trabalhar:
+**Verificar que o venv esta ativo**:
 ```bash
-source /data/openpilot_venv/bin/activate
-```
-
----
-
-## Passo 8: Instalar Dependencias Python
-
-### 8.1 Opcao A: Via pip (mais simples)
-
-```bash
-cd /data/openpilot
-pip install -e '.[dev]'
-```
-
-### 8.2 Opcao B: Via uv (mais rapido, metodo oficial)
-
-```bash
-# Instalar uv
-curl -LsSf https://astral.sh/uv/install.sh | sh
-export PATH="$HOME/.local/bin:$PATH"
-
-# Sincronizar dependencias
-cd /data/openpilot
-uv sync --frozen --all-extras
-source .venv/bin/activate
-```
-
-### 8.3 Pacotes que podem falhar no ARM64
-
-Alguns pacotes podem precisar de build manual:
-
-```bash
-# Se pycapnp falhar:
-pip install pycapnp==2.1.0 --no-binary :all:
-
-# Se numpy falhar:
-pip install numpy --no-binary :all:
-
-# Se casadi falhar (MPC solver):
-pip install casadi --no-binary :all:
-
-# Se pyaudio falhar:
-sudo apt install -y portaudio19-dev
-pip install pyaudio
-```
-
-### 8.4 Nota sobre pyopencl
-
-O `pyproject.toml` ja exclui `pyopencl` para `aarch64`:
-```
-"pyopencl; platform_machine != 'aarch64'"
-```
-Isso e intencional - o projeto usa OpenCL via C++ (nao via Python).
-
----
-
-## Passo 9: Criar Symlinks para Third-Party
-
-Os prebuilds `acados` e `libyuv` existem para `aarch64` e sao ABI-compativeis. O build system procura pelo nome da arquitetura `jarch64`:
-
-```bash
-cd /data/openpilot/third_party/acados && ln -sf aarch64 jarch64
-cd /data/openpilot/third_party/libyuv && ln -sf aarch64 jarch64
-```
-
-**Verificar**:
-```bash
-ls -la /data/openpilot/third_party/acados/jarch64/
-ls -la /data/openpilot/third_party/libyuv/jarch64/
-# Ambos devem apontar para aarch64/
+which python3
+# Deve mostrar: /data/openpilot/.venv/bin/python3
+python3 --version
+# Deve mostrar: Python 3.11.11
 ```
 
 ---
@@ -280,55 +219,101 @@ ls -la /data/openpilot/third_party/libyuv/jarch64/
 
 ```bash
 cd /data/openpilot
-source /data/openpilot_venv/bin/activate
+source .venv/bin/activate
 
-# Compilar com todos os cores (Xavier tem 8)
+# Garantir CUDA e TMPDIR
+export PATH=/usr/local/cuda/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+export TMPDIR=/home/$USER/tmp
+
+# Compilar com 8 cores
 scons -j8
+```
+
+O build compila:
+- Bibliotecas C++ (cereal, msgq, visionipc, common, rednose, etc.)
+- Modulos Cython (params_pyx, visionipc_pyx, commonmodel_pyx, etc.)
+- Firmware do Panda (via arm-none-eabi-gcc)
+- **Modelos tinygrad para CUDA** (driving_vision, driving_policy, dmonitoring_model)
+- Traducoes da UI
+
+### Verificar Artefatos do Build
+
+```bash
+# Modelos CUDA compilados
+ls -lh selfdrive/modeld/models/*_tinygrad.pkl
+# driving_vision_tinygrad.pkl  (~50MB)
+# driving_policy_tinygrad.pkl  (~14MB)
+# dmonitoring_model_tinygrad.pkl (~10MB)
+
+# Modulos Cython
+ls selfdrive/modeld/models/commonmodel_pyx.so
+ls msgq_repo/msgq/visionipc/visionipc_pyx.so
+ls common/params_pyx.so
 ```
 
 ### Erros Comuns na Compilacao
 
 | Erro | Causa | Solucao |
 |------|-------|---------|
-| `arch "aarch64" not in assert` | `/JETSON` nao existe | `sudo touch /JETSON` |
-| `clang: not found` | clang nao instalado | `sudo apt install clang` |
-| `capnp/kj not found` | capnproto nao instalado | `sudo apt install libcapnp-dev capnproto` |
-| `zmq.h not found` | libzmq nao instalado | `sudo apt install libzmq3-dev` |
-| `usb.h not found` | libusb nao instalado | `sudo apt install libusb-1.0-0-dev` |
-| `No module named 'scons'` | venv nao ativado | `source /data/openpilot_venv/bin/activate` |
-| `third_party/acados/jarch64 not found` | symlink nao criado | ver Passo 9 |
+| `No space left on device` | eMMC cheia | Mover para NVMe, setar `TMPDIR` |
+| `arm-none-eabi-gcc: not found` | Cross-compiler faltando | `sudo apt install gcc-arm-none-eabi` |
+| `Error 127` em traducoes | `msgfmt` faltando | `sudo apt install gettext` |
+| `clang: not found` | Compilador faltando | `sudo apt install clang` |
 | `CL/cl.h not found` | OpenCL headers | `sudo apt install opencl-headers` |
-| `cuda.h not found` | CUDA path nao configurado | verificar `/usr/local/cuda/include/` |
+| `jarch64 not found` (acados/libyuv) | Symlinks ausentes | Ja estao no repo (commitados) |
 
 ---
 
-## Passo 11: Compilar Modelos para CUDA
-
-Apos as modificacoes de codigo (Fase 3 do PORTING_PLAN.md), os modelos ONNX serao compilados para CUDA pickle:
+## Passo 11: Testar CUDA com tinygrad
 
 ```bash
-# Os modelos sao compilados automaticamente pelo scons via selfdrive/modeld/SConscript
-# Com as flags: DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=0
-
-# Para testar CUDA manualmente:
-python3 -c "
-import os; os.environ['DEV']='CUDA'
-from tinygrad.tensor import Tensor
-from tinygrad.dtype import dtypes
-import numpy as np
-t = Tensor(np.random.randn(1,12,128,256).astype(np.float16), dtype=dtypes.float16)
-print('CUDA tensor shape:', t.shape, 'device:', t.device)
-r = t.sum().realize()
-print('Resultado:', r.numpy())
+source .venv/bin/activate
+DEV=CUDA python3 -c "
+from tinygrad import Tensor, Device
+print('Devices:', list(Device.get_available_devices()))
+print('Default:', Device.DEFAULT)
+t = Tensor([1,2,3]).realize()
+print('Sum:', t.sum().item())
 print('CUDA tinygrad OK!')
 "
+# Deve imprimir:
+#   Devices: ['CUDA', 'CPU']
+#   Default: CUDA
+#   Sum: 6
+#   CUDA tinygrad OK!
 ```
-
-Se `DEV=CUDA` falhar, tentar `DEV=CL` como fallback.
 
 ---
 
-## Passo 12: Configurar Performance da Jetson
+## Passo 12: Testar Hardware Abstraction
+
+```bash
+source .venv/bin/activate
+python3 -c "
+from openpilot.system.hardware import HARDWARE, TICI, JETSON, PC
+print(f'TICI={TICI}, JETSON={JETSON}, PC={PC}')
+print(f'Device: {HARDWARE.get_device_type()}')
+print(f'OS: {HARDWARE.get_os_version()}')
+print(f'Serial: {HARDWARE.get_serial()}')
+print(f'GPU: {HARDWARE.get_gpu_usage_percent()}%')
+thermal = HARDWARE.get_thermal_config()
+print(f'CPU zones: {[z.name for z in thermal.cpu]}')
+print(f'GPU zones: {[z.name for z in thermal.gpu]}')
+"
+# Deve mostrar:
+#   TICI=False, JETSON=True, PC=False
+#   Device: pc
+#   OS: # R35 (release)
+#   Serial: <chip_uid>
+#   GPU: 0.0%
+#   CPU zones: ['CPU-therm']
+#   GPU zones: ['GPU-therm']
+```
+
+---
+
+## Passo 13: Configurar Performance da Jetson
 
 ```bash
 # Modo MAXN (30W, todos os 8 cores, GPU max)
@@ -344,26 +329,24 @@ sudo nvpmodel -q
 
 ---
 
-## Passo 13: Conectar Hardware
+## Passo 14: Conectar Hardware
 
-### 13.1 Camera USB (teste inicial)
+### 14.1 Camera USB (teste inicial)
 
 ```bash
 # Conectar webcam USB (Logitech C920/C930 ou similar)
 ls /dev/video*
 # Deve mostrar /dev/video0
 
-# Testar camera
-sudo apt install -y v4l-utils
-v4l2-ctl --device=/dev/video0 --list-formats-ext
+# Permissao
+sudo usermod -aG video $USER
 ```
 
-### 13.2 Panda USB (comunicacao veicular)
+### 14.2 Panda USB (comunicacao veicular)
 
 ```bash
 # Conectar comma Panda via USB
 lsusb | grep -i "comma\|bbaa"
-# Deve mostrar o dispositivo Panda
 
 # Permissao USB (sem sudo)
 sudo tee /etc/udev/rules.d/11-panda.rules << 'EOF'
@@ -376,14 +359,17 @@ sudo udevadm trigger
 
 ---
 
-## Passo 14: Rodar o DragonPilot
+## Passo 15: Rodar o DragonPilot
 
 ```bash
 cd /data/openpilot
-source /data/openpilot_venv/bin/activate
+source .venv/bin/activate
+export PATH=/usr/local/cuda/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+export TMPDIR=/home/$USER/tmp
 
 # Com webcam USB
-USE_WEBCAM=1 python -m selfdrive.manager.manager
+USE_WEBCAM=1 python3 -c "from openpilot.system.manager.manager import main; main()"
 ```
 
 ### Variaveis de Ambiente Uteis
@@ -396,47 +382,15 @@ USE_WEBCAM=1 python -m selfdrive.manager.manager
 | `PASSIVE=1` | Modo passivo (sem controle do veiculo) |
 | `SIMULATION=1` | Modo simulacao |
 | `FINGERPRINT=TOYOTA_COROLLA_TSS2` | Forcar fingerprint de veiculo (para teste) |
+| `DISPLAY=:0` | Necessario para a UI se rodando via SSH |
 
----
+### Processos que devem aparecer verdes no manager
 
-## Passo 15: Verificacao End-to-End
-
-Lista de verificacao para confirmar que tudo esta funcionando:
-
-```bash
-# 1. Python 3.11
-python3.11 --version  # Python 3.11.x
-
-# 2. CUDA
-nvcc --version  # CUDA 11.4
-
-# 3. OpenCL
-clinfo | grep "Device Name"  # Xavier
-
-# 4. Compilacao
-cd /data/openpilot && scons -j8  # sem erros
-
-# 5. Marker
-ls /JETSON  # deve existir
-
-# 6. Symlinks
-ls -la third_party/acados/jarch64  # -> aarch64
-ls -la third_party/libyuv/jarch64  # -> aarch64
-
-# 7. Camera
-ls /dev/video0  # deve existir
-
-# 8. Panda (se conectado)
-lsusb | grep bbaa  # deve aparecer
-
-# 9. CUDA tinygrad
-python3 -c "import os; os.environ['DEV']='CUDA'; from tinygrad.tensor import Tensor; print(Tensor([1,2,3]).sum().realize().numpy())"
-# Deve imprimir: 6
-
-# 10. Manager
-USE_WEBCAM=1 python -m selfdrive.manager.manager
-# Deve iniciar sem crash
 ```
+logmessaged timed ui deleter pandad hardwared tombstoned statsd dashy
+```
+
+> **Nota**: A UI (raylib/GLFW) requer um display X11. Se rodando via SSH sem display, a UI vai crashar repetidamente mas os outros processos continuam funcionando normalmente. Use `DISPLAY=:0` se a Jetson tem monitor conectado.
 
 ---
 
@@ -446,15 +400,18 @@ USE_WEBCAM=1 python -m selfdrive.manager.manager
 ```bash
 # Verificar espaco
 df -h
-# Limpar cache de compilacao
-rm -rf /tmp/scons_cache /data/scons_cache
+# A eMMC (/dev/mmcblk0p1) tem apenas 28GB
+# Solucao: mover tudo para NVMe e setar TMPDIR
+export TMPDIR=/home/$USER/tmp
+sudo apt-get clean
 ```
 
-### "Permission denied" no /dev/video0
+### "PermissionError: SCHED_FIFO"
 ```bash
-sudo usermod -aG video $USER
-# Fazer logout/login ou:
-newgrp video
+# Ja tratado no codigo (fallback gracioso)
+# Se quiser real-time scheduling nativo:
+echo "$USER - rtprio 99" | sudo tee -a /etc/security/limits.conf
+# Fazer logout/login para aplicar
 ```
 
 ### "CUDA out of memory"
@@ -465,33 +422,24 @@ sudo tegrastats
 sudo fuser -v /dev/nvhost-gpu
 ```
 
-### "OpenCL platform not found"
+### "OpenCL platform not found" ou "0 platforms"
 ```bash
-# Verificar ICD
-ls /etc/OpenCL/vendors/
-# Deve ter nvidia.icd
-
-# Se nao existir:
-sudo mkdir -p /etc/OpenCL/vendors
-echo "libnvidia-opencl.so.1" | sudo tee /etc/OpenCL/vendors/nvidia.icd
+# Instalar POCL
+sudo apt install -y pocl-opencl-icd libpocl2
+# Verificar
+clinfo | head -5
+# Deve mostrar: Number of platforms: 1
 ```
 
 ### "Module not found" no Python
 ```bash
 # Verificar que o venv esta ativo
-which python
-# Deve mostrar /data/openpilot_venv/bin/python
+which python3
+# Deve mostrar: /data/openpilot/.venv/bin/python3
 
 # Re-instalar pacotes
-pip install -e '.[dev]'
-```
-
-### Build falha em msgq/visionbuf
-```bash
-# Verificar que OpenCL esta acessivel
-pkg-config --libs OpenCL
-# Se falhar:
-sudo apt install ocl-icd-opencl-dev
+pip install -e .
+pip install -e msgq_repo/ -e opendbc_repo/ -e panda/ -e tinygrad_repo/
 ```
 
 ---
@@ -500,20 +448,17 @@ sudo apt install ocl-icd-opencl-dev
 
 ```bash
 # Ativar ambiente
-source /data/openpilot_venv/bin/activate
+source /data/openpilot/.venv/bin/activate
 cd /data/openpilot
+export PATH=/usr/local/cuda/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+export TMPDIR=/home/$USER/tmp
 
 # Compilar
 scons -j8
 
 # Rodar
-USE_WEBCAM=1 python -m selfdrive.manager.manager
-
-# Replay de rota gravada (teste sem camera)
-tools/replay/replay --demo-route
-
-# Ver logs em tempo real
-python -m cereal.messaging.bridge
+USE_WEBCAM=1 python3 -c "from openpilot.system.manager.manager import main; main()"
 
 # Monitorar Jetson
 sudo tegrastats  # CPU/GPU/RAM/temp em tempo real
@@ -521,9 +466,3 @@ sudo tegrastats  # CPU/GPU/RAM/temp em tempo real
 # Performance maxima
 sudo nvpmodel -m 0 && sudo jetson_clocks
 ```
-
----
-
-## Proximos Passos
-
-Apos confirmar que o ambiente esta funcionando, seguir o [Plano de Port](PORTING_PLAN.md) para implementar as modificacoes de codigo (Fases 1-7).
