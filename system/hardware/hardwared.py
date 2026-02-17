@@ -299,6 +299,12 @@ def hardware_thread(end_event, hw_queue) -> None:
     if fan_controller is not None:
       msg.deviceState.fanSpeedPercentDesired = fan_controller.update(all_comp_temp, onroad_conditions["ignition"])
 
+    # Update Jetson Dynamic Frequency Scaling
+    if JETSON and hasattr(HARDWARE, 'dfs') and HARDWARE.dfs is not None:
+      avg_cpu = sum(online_cpu_usage) / max(len(online_cpu_usage), 1)
+      gpu_usage = msg.deviceState.gpuUsagePercent
+      HARDWARE.dfs.update(avg_cpu, gpu_usage, all_comp_temp, onroad_conditions["ignition"])
+
     is_offroad_for_5_min = (started_ts is None) and ((not started_seen) or (off_ts is None) or (time.monotonic() - off_ts > 60 * 5))
     if is_offroad_for_5_min and offroad_comp_temp > OFFROAD_DANGER_TEMP:
       # if device is offroad and already hot without the extra onroad load,
