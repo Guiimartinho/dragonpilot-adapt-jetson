@@ -394,6 +394,155 @@ logmessaged timed ui deleter pandad hardwared tombstoned statsd dashy
 
 ---
 
+## Passo 16: Configurar Display X11 e VNC (Acesso Remoto)
+
+A UI do DragonPilot usa raylib/OpenGL e requer um display X11. Para acessar remotamente via VNC, siga os passos abaixo.
+
+### 16.1 Xorg
+
+A Jetson AGX Xavier ja inicia o Xorg automaticamente no display `:0` via HDMI. Resolucao padrao: **1920x1080**.
+
+```bash
+# Verificar que o Xorg esta rodando
+export DISPLAY=:0
+xdpyinfo | grep dimensions
+# Deve mostrar: dimensions: 1920x1080 pixels
+```
+
+### 16.2 Instalar x11vnc
+
+```bash
+sudo apt-get install -y x11vnc
+```
+
+### 16.3 Iniciar o Servidor VNC
+
+Configuracao **exata** para o VNC casar perfeitamente com a janela da UI:
+
+```bash
+x11vnc -display :0 \
+  -forever \
+  -shared \
+  -clip 1920x960+0+60 \
+  -scale 0.5 \
+  -rfbport 5900 \
+  -bg \
+  -o /tmp/x11vnc.log
+```
+
+**Parametros explicados**:
+
+| Parametro | Valor | Descricao |
+|-----------|-------|-----------|
+| `-display` | `:0` | Display X11 do Xorg |
+| `-forever` | - | Manter servidor rodando apos desconexao do cliente |
+| `-shared` | - | Permitir multiplos clientes simultaneos |
+| `-clip` | `1920x960+0+60` | Capturar apenas a area da UI: 1920x960 pixels, com offset Y=60 (pula a borda preta superior do fullscreen) |
+| `-scale` | `0.5` | Escalar para 960x480 no cliente VNC |
+| `-rfbport` | `5900` | Porta VNC padrao |
+| `-bg` | - | Rodar em background |
+| `-o` | `/tmp/x11vnc.log` | Arquivo de log |
+
+> **Por que `-clip 1920x960+0+60`?**
+> A UI renderiza em resolucao de design 2160x1080, escalada por 0.889 para 1920x960.
+> Em modo fullscreen no display 1920x1080, o conteudo fica centralizado verticalmente
+> com ~60px de borda preta em cima e embaixo. O `-clip` recorta exatamente a area visivel
+> da UI, eliminando as bordas pretas.
+
+**Resolucao resultante no cliente VNC**: **960x480** (exatamente o conteudo da UI, sem cortes, sem bordas pretas).
+
+### 16.4 Iniciar a UI
+
+```bash
+cd /data/openpilot
+source .venv/bin/activate
+export DISPLAY=:0 BIG=1 SCALE=0.889
+
+# Em foreground (para debug):
+python3 -m selfdrive.ui.ui
+
+# Em background (para uso normal):
+nohup python3 -m selfdrive.ui.ui > /tmp/ui.log 2>&1 &
+```
+
+**Variaveis de ambiente da UI**:
+
+| Variavel | Valor | Descricao |
+|----------|-------|-----------|
+| `DISPLAY` | `:0` | Display X11 |
+| `BIG` | `1` | UI em resolucao grande (2160x1080 design, igual ao comma 3) |
+| `SCALE` | `0.889` | Fator de escala: 2160x1080 * 0.889 = 1920x960 (cabe no display 1920x1080) |
+| `ENABLE_VSYNC` | `1` | VSync ativado (padrao, 60 FPS suaves) |
+| `SHOW_FPS` | `1` | (Opcional) Mostra contador de FPS no canto |
+
+### 16.5 Iniciar o Replay (para teste sem carro)
+
+```bash
+cd /data/openpilot
+source .venv/bin/activate
+export TERM=xterm  # Necessario para ncurses do replay via SSH
+
+./tools/replay/replay --demo
+```
+
+> **Nota**: O `TERM=xterm` evita o erro "Error opening terminal: unknown" ao rodar replay via SSH.
+
+### 16.6 Conectar com Cliente VNC
+
+No seu PC, abra um cliente VNC (TigerVNC, RealVNC, TightVNC, etc.) e conecte em:
+
+```
+192.168.3.152:5900
+```
+
+A janela VNC mostrara a UI do DragonPilot em **960x480**, centralizada e sem cortes.
+
+### 16.7 Script de Inicializacao Completo (VNC + UI + Replay)
+
+```bash
+#!/bin/bash
+# /data/openpilot/start_vnc_ui.sh
+# Inicia VNC, UI e replay para teste/demo
+
+cd /data/openpilot
+source .venv/bin/activate
+export DISPLAY=:0
+export PATH=/usr/local/cuda/bin:$PATH
+export LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH
+
+# 1. Parar processos anteriores
+killall x11vnc python3 2>/dev/null
+sleep 1
+
+# 2. Iniciar VNC (clip exato na area da UI)
+x11vnc -display :0 -forever -shared \
+  -clip 1920x960+0+60 -scale 0.5 \
+  -rfbport 5900 -bg -o /tmp/x11vnc.log
+
+# 3. Iniciar UI
+export BIG=1 SCALE=0.889
+nohup python3 -m selfdrive.ui.ui > /tmp/ui.log 2>&1 &
+sleep 3
+
+# 4. Iniciar Replay (opcional)
+export TERM=xterm
+nohup ./tools/replay/replay --demo > /tmp/replay.log 2>&1 &
+
+echo "VNC rodando em porta 5900 (960x480)"
+echo "UI PID: $(pgrep -f 'selfdrive.ui.ui')"
+echo "Replay PID: $(pgrep -f 'replay')"
+```
+
+```bash
+# Tornar executavel
+chmod +x /data/openpilot/start_vnc_ui.sh
+
+# Usar
+/data/openpilot/start_vnc_ui.sh
+```
+
+---
+
 ## Troubleshooting
 
 ### "No space left on device"
