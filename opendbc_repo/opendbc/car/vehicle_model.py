@@ -36,6 +36,7 @@ class VehicleModel:
 
     self.cF_orig: float = CP.tireStiffnessFront
     self.cR_orig: float = CP.tireStiffnessRear
+    self._slip_factor_cache: float | None = None  # Cache: recalculated only when params change
     self.update_params(1.0, CP.steerRatio)
 
   def update_params(self, stiffness_factor: float, steer_ratio: float) -> None:
@@ -43,6 +44,7 @@ class VehicleModel:
     self.cF: float = stiffness_factor * self.cF_orig
     self.cR: float = stiffness_factor * self.cR_orig
     self.sR: float = steer_ratio
+    self._slip_factor_cache = None  # Invalidate cache when params change
 
   def steady_state_sol(self, sa: float, u: float, roll: float) -> np.ndarray:
     """Returns the steady state solution.
@@ -86,7 +88,9 @@ class VehicleModel:
     Returns:
       Curvature factor [1/m]
     """
-    sf = calc_slip_factor(self)
+    if self._slip_factor_cache is None:
+      self._slip_factor_cache = calc_slip_factor(self)
+    sf = self._slip_factor_cache
     return (1. - self.chi) / (1. - sf * u**2) / self.l
 
   def get_steer_from_curvature(self, curv: float, u: float, roll: float) -> float:
@@ -113,7 +117,9 @@ class VehicleModel:
     Returns:
       Roll compensation curvature [rad]
     """
-    sf = calc_slip_factor(self)
+    if self._slip_factor_cache is None:
+      self._slip_factor_cache = calc_slip_factor(self)
+    sf = self._slip_factor_cache
 
     if abs(sf) < 1e-6:
       return 0
