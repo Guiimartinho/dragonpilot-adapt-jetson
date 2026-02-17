@@ -15,6 +15,8 @@ replay_lib_src = ["replay.cc", "consoleui.cc", "camera.cc", "filereader.cc", "lo
                   "route.cc", "util.cc", "seg_mgr.cc", "timeline.cc", "api.cc"]
 if arch != "Darwin":
   replay_lib_src.append("qcom_decoder.cc")
+if arch == "jarch64":
+  replay_lib_src.append("nvdec_decoder.cc")
 replay_lib = replay_env.Library("replay", replay_lib_src, LIBS=base_libs, FRAMEWORKS=base_frameworks)
 Export('replay_lib')
 replay_libs = [replay_lib, 'avutil', 'avcodec', 'avformat', 'bz2', 'zstd', 'curl', 'yuv', 'ncurses'] + base_libs

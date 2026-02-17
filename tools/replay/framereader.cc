@@ -39,7 +39,11 @@ struct DecoderManager {
     }
 
     std::unique_ptr<VideoDecoder> decoder;
-    #ifndef __APPLE__
+    #ifdef __JETSON__
+    if (hw_decoder) {
+      decoder = std::make_unique<NvdecVideoDecoder>();
+    } else
+    #elif !defined(__APPLE__)
     if (!Hardware::PC() && hw_decoder) {
       decoder = std::make_unique<QcomVideoDecoder>();
     } else

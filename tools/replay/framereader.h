@@ -68,6 +68,10 @@ private:
   AVBufferRef *hw_device_ctx = nullptr;
 };
 
+#ifdef __JETSON__
+#include "tools/replay/nvdec_decoder.h"
+#endif
+
 #ifndef __APPLE__
 class QcomVideoDecoder : public VideoDecoder {
 public:
