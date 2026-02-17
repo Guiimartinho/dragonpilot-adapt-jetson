@@ -1,11 +1,11 @@
 import os
 import glob
 
-Import('env', 'envCython', 'arch', 'cereal', 'messaging', 'common', 'visionipc', 'transformations')
+Import('env', 'envCython', 'arch', 'cereal', 'messaging', 'common', 'visionipc', 'transformations', 'vipc_extra_libs')
 lenv = env.Clone()
 lenvCython = envCython.Clone()
 
-libs = [cereal, messaging, visionipc, common, 'capnp', 'kj', 'pthread']
+libs = [cereal, messaging, visionipc, common, 'capnp', 'kj', 'pthread'] + vipc_extra_libs
 frameworks = []
 
 common_src = [
@@ -51,7 +51,7 @@ def tg_compile(flags, model_name):
 for model_name in ['driving_vision', 'driving_policy', 'dmonitoring_model']:
   flags = {
     'larch64': 'DEV=QCOM FLOAT16=1 NOLOCALS=1 IMAGE=2 JIT_BATCH_SIZE=0',
-    'jarch64': 'DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=0 CUDA_OPT=1',  # Volta sm_72 tensor cores
+    'jarch64': 'DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=32 CUDA_OPT=1 USE_TC=1',  # Volta sm_72 tensor cores
     'Darwin': f'DEV=CPU HOME={os.path.expanduser("~")}', # tinygrad calls brew which needs a $HOME in the env
   }.get(arch, 'DEV=CPU CPU_LLVM=1')
   tg_compile(flags, model_name)

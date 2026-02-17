@@ -27,19 +27,27 @@ public:
   virtual cl_mem* prepare(cl_mem yuv_cl, int frame_width, int frame_height, int frame_stride, int frame_uv_offset, const mat3& projection) { return NULL; }
   uint8_t* buffer_from_cl(cl_mem *in_frames, int buffer_size) {
 #ifdef __JETSON__
-    // Jetson: non-blocking map + event-based sync to overlap GPU transforms with CPU work.
-    // On Jetson unified memory, clEnqueueMapBuffer may return a direct pointer (zero-copy).
+    // Jetson zero-copy path:
+    // When VisionBuf uses CUDA unified memory (cudaMallocManaged), the OpenCL buffer
+    // created with CL_MEM_USE_HOST_PTR shares the same physical memory.
+    // clEnqueueMapBuffer returns a direct pointer to unified memory - no copy needed.
+    // We only memcpy to input_frames as a safety net; on true unified memory the
+    // map pointer IS the buffer (latency ~0).
     cl_int map_err;
     cl_event map_event;
     void* mapped = clEnqueueMapBuffer(q, *in_frames, CL_FALSE, CL_MAP_READ,
                                       0, buffer_size, 0, nullptr, &map_event, &map_err);
     if (map_err == CL_SUCCESS && mapped != nullptr) {
-      // Wait only for this specific operation, not the entire queue
       clWaitForEvents(1, &map_event);
       clReleaseEvent(map_event);
-      memcpy(input_frames.get(), mapped, buffer_size);
+      // On unified memory, mapped == input buffer (zero-copy).
+      // On non-unified, this is a fast pinned-memory copy.
+      if (mapped != input_frames.get()) {
+        memcpy(input_frames.get(), mapped, buffer_size);
+      }
       clEnqueueUnmapMemObject(q, *in_frames, mapped, 0, nullptr, nullptr);
     } else {
+      // Fallback: blocking read (should not happen with proper unified memory setup)
       if (map_event) clReleaseEvent(map_event);
       CL_CHECK(clEnqueueReadBuffer(q, *in_frames, CL_TRUE, 0, buffer_size, input_frames.get(), 0, nullptr, nullptr));
     }

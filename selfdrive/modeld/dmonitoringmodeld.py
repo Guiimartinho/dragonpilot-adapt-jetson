@@ -8,7 +8,8 @@ elif JETSON:
   os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
   os.environ.setdefault('FLOAT16', '1')
   os.environ.setdefault('CUDA_OPT', '1')
-  os.environ.setdefault('JIT_BATCH_SIZE', '0')
+  os.environ.setdefault('JIT_BATCH_SIZE', '32')  # Consolidate kernels into unified CUDA graph
+  os.environ.setdefault('USE_TC', '1')  # Force tensor core usage on Volta
 else:
   os.environ['DEV'] = 'CPU'
 from tinygrad.tensor import Tensor
@@ -32,7 +33,26 @@ from openpilot.selfdrive.modeld.runners.tinygrad_helpers import qcom_tensor_from
 PROCESS_NAME = "selfdrive.modeld.dmonitoringmodeld"
 SEND_RAW_PRED = os.getenv('SEND_RAW_PRED')
 MODEL_PKL_PATH = Path(__file__).parent / 'models/dmonitoring_model_tinygrad.pkl'
+MODEL_ONNX_PATH = Path(__file__).parent / 'models/dmonitoring_model.onnx'
 METADATA_PATH = Path(__file__).parent / 'models/dmonitoring_model_metadata.pkl'
+
+# DLA/TensorRT support for Jetson (offloads dmonitoring from GPU to DLA)
+USE_DLA = JETSON and os.getenv("USE_DLA", "1") == "1"
+USE_TENSORRT = JETSON and os.getenv("USE_TENSORRT", "1") == "1"
+_dla_available = False
+_trt_available = False
+if USE_DLA:
+  try:
+    from openpilot.selfdrive.modeld.runners.dla_runner import DLAModelRunner
+    _dla_available = True
+  except ImportError:
+    pass
+if not _dla_available and USE_TENSORRT:
+  try:
+    from openpilot.selfdrive.modeld.runners.tensorrt_runner import TensorRTModelRunner
+    _trt_available = True
+  except ImportError:
+    pass
 
 
 class ModelState:
@@ -51,8 +71,28 @@ class ModelState:
     }
 
     self.tensor_inputs = {k: Tensor(v, device='NPY').realize() for k,v in self.numpy_inputs.items()}
-    with open(MODEL_PKL_PATH, "rb") as f:
-      self.model_run = pickle.load(f)
+
+    # Initialize inference backend: DLA (preferred) > TensorRT GPU > tinygrad
+    self._use_dla = False
+    self._use_trt = False
+    if _dla_available and MODEL_ONNX_PATH.exists():
+      try:
+        self._dla_runner = DLAModelRunner(str(MODEL_ONNX_PATH), dla_core=0)
+        self._use_dla = True
+        cloudlog.warning("dmonitoringmodeld: DLA runner loaded (core=%d, using_dla=%s)",
+                         self._dla_runner._runner.active_dla_core, self._dla_runner.is_using_dla)
+      except Exception as e:
+        cloudlog.warning("dmonitoringmodeld: DLA init failed (%s), trying TensorRT GPU", e)
+    if not self._use_dla and _trt_available and MODEL_ONNX_PATH.exists():
+      try:
+        self._trt_runner = TensorRTModelRunner(str(MODEL_ONNX_PATH), fp16=True)
+        self._use_trt = True
+        cloudlog.warning("dmonitoringmodeld: TensorRT GPU runner loaded")
+      except Exception as e:
+        cloudlog.warning("dmonitoringmodeld: TensorRT init failed (%s), using tinygrad", e)
+    if not self._use_dla and not self._use_trt:
+      with open(MODEL_PKL_PATH, "rb") as f:
+        self.model_run = pickle.load(f)
 
   def run(self, buf: VisionBuf, calib: np.ndarray, transform: np.ndarray) -> tuple[np.ndarray, float]:
     self.numpy_inputs['calib'][0,:] = calib
@@ -68,8 +108,15 @@ class ModelState:
       # Generic path: OpenCL buffer → CPU → Tensor (used by Jetson CUDA, PC CPU)
       self.tensor_inputs['input_img'] = Tensor(self.frame.buffer_from_cl(input_img_cl).reshape(self.input_shapes['input_img']), dtype=dtypes.uint8).realize()
 
-
-    output = self.model_run(**self.tensor_inputs).contiguous().realize().uop.base.buffer.numpy()
+    if self._use_dla or self._use_trt:
+      # DLA/TensorRT path: convert tensors to numpy for TRT inference
+      np_inputs = {}
+      for k, v in self.tensor_inputs.items():
+        np_inputs[k] = v.numpy() if hasattr(v, 'numpy') else np.asarray(v)
+      runner = self._dla_runner if self._use_dla else self._trt_runner
+      output = runner(**np_inputs)
+    else:
+      output = self.model_run(**self.tensor_inputs).contiguous().realize().uop.base.buffer.numpy()
 
     t2 = time.perf_counter()
     return output, t2 - t1
