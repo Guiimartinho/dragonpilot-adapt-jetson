@@ -1,5 +1,7 @@
 import os
 import subprocess
+import threading
+import time
 
 from cereal import log
 from openpilot.system.hardware.base import HardwareBase, LPABase, ThermalConfig, ThermalZone
@@ -133,9 +135,24 @@ class Jetson(HardwareBase):
     # nvpmodel: 0 = MAXN (30W), 2 = MODE_15W, 1 = MODE_10W
     try:
       if powersave_enabled:
-        subprocess.check_output(["sudo", "nvpmodel", "-m", "2"], stderr=subprocess.STDOUT)
+        subprocess.check_output(["sudo", "nvpmodel", "-m", "1"], stderr=subprocess.STDOUT)  # 10W parked
+        # Disable cores 4-7 to save power when parked
+        for core in range(4, 8):
+          try:
+            with open(f"/sys/devices/system/cpu/cpu{core}/online", 'w') as f:
+              f.write("0")
+          except (OSError, PermissionError):
+            pass
       else:
-        subprocess.check_output(["sudo", "nvpmodel", "-m", "0"], stderr=subprocess.STDOUT)
+        # Re-enable all cores
+        for core in range(4, 8):
+          try:
+            with open(f"/sys/devices/system/cpu/cpu{core}/online", 'w') as f:
+              f.write("1")
+          except (OSError, PermissionError):
+            pass
+        subprocess.check_output(["sudo", "nvpmodel", "-m", "0"], stderr=subprocess.STDOUT)  # MAXN driving
+        subprocess.check_output(["sudo", "jetson_clocks"], stderr=subprocess.STDOUT)
     except (subprocess.CalledProcessError, FileNotFoundError):
       pass
 
@@ -152,9 +169,33 @@ class Jetson(HardwareBase):
   def initialize_hardware(self):
     # Lock clocks to maximum for consistent performance
     try:
+      subprocess.check_output(["sudo", "nvpmodel", "-m", "0"], stderr=subprocess.STDOUT)  # MAXN 30W
       subprocess.check_output(["sudo", "jetson_clocks"], stderr=subprocess.STDOUT)
     except (subprocess.CalledProcessError, FileNotFoundError):
       pass
+
+    # Start watchdog thread to reapply clocks if thermal throttling undoes them
+    threading.Thread(target=self._jetson_clocks_watchdog, daemon=True).start()
+
+    # Initialize DFS for dynamic power management
+    try:
+      from openpilot.system.hardware.jetson.dfs import JetsonDFS
+      self.dfs = JetsonDFS()
+      self.dfs.initialize()
+    except Exception:
+      self.dfs = None
+
+  def _jetson_clocks_watchdog(self):
+    """Re-apply jetson_clocks if thermal throttling undoes frequency lock."""
+    while True:
+      time.sleep(120)  # Check every 2 minutes
+      try:
+        with open("/sys/devices/system/cpu/cpu0/cpufreq/scaling_cur_freq") as f:
+          freq = int(f.read().strip())
+        if freq < 2_000_000:  # Below 2GHz means throttled
+          subprocess.call(["sudo", "jetson_clocks"], stderr=subprocess.DEVNULL, stdout=subprocess.DEVNULL)
+      except Exception:
+        pass
 
   def get_networks(self):
     return None
