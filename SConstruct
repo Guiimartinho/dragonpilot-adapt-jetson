@@ -231,7 +231,10 @@ SConscript(['third_party/SConscript'])
 
 SConscript(['selfdrive/SConscript'])
 
-if Dir('#tools/cabana/').exists() and GetOption('extras'):
+# Always build replay for Jetson (needed for demo/testing without live hardware)
+if arch == "jarch64":
+  SConscript(['tools/replay/SConscript'])
+elif Dir('#tools/cabana/').exists() and GetOption('extras'):
   SConscript(['tools/replay/SConscript'])
   if arch not in ("larch64", "jarch64"):
     SConscript(['tools/cabana/SConscript'])
