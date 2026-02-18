@@ -9,12 +9,22 @@ Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 
 | Componente | Status | Detalhes |
 |------------|--------|----------|
-| Build system (`jarch64`) | OK | scons compila sem erros |
-| Hardware abstraction | OK | Classe Jetson com thermal, fan, DFS |
+| Build system (`jarch64`) | OK | scons compila sem erros, nvcc para CUDA kernels |
+| Hardware abstraction | OK | Classe Jetson com thermal, fan, DFS, hugepages |
 | Inferencia CUDA (modeld) | OK | ~19ms total (vision 8.7ms + policy 3.3ms + dmon 6.5ms) |
+| TensorRT (opcional) | OK | Script de instalacao pronto, 2-3x speedup esperado |
+| DLA (dmonitoring) | OK | Fallback chain: DLA0→DLA1→GPU TensorRT→tinygrad |
+| CUDA kernels nativos | OK | transform.cu + loadyuv.cu compilados via nvcc |
 | UI (raylib/OpenGL) | OK | 60 FPS, fullscreen, VSync, render texture |
 | Replay (NVDEC) | OK | Decode HW via V4L2/CUDA hwaccel |
 | Encoder (NVENC) | OK | h264_nvmpi / h264_nvenc |
+| Core affinity (8 cores) | OK | SCHED_FIFO, cada processo em core dedicado |
+| MPC otimizado | OK | N=24 (era 32), ~25% mais rapido |
+| Cache slip_factor | OK | VehicleModel com _slip_factor_cache |
+| Power management | OK | MAXN 30W dirigindo, MODE_10W estacionado |
+| Fan controller PID | OK | Hysteresis 5%, protecao NaN/Inf |
+| tmpfs log buffer | OK | /dev/shm staging, flush NVMe 5s |
+| Huge Pages CUDA | OK | 256 x 2MB (512MB) para TLB |
 | Acesso remoto (VNC) | OK | x11vnc com clip exato na UI (960x480) |
 | Camera USB (webcam) | Pendente | webcamerad pronto, falta testar |
 | Panda USB (CAN) | Pendente | pandad pronto, falta conectar hardware |

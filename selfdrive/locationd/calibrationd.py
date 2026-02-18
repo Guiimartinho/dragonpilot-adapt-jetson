@@ -17,6 +17,7 @@ from openpilot.system.hardware import HARDWARE
 from openpilot.common.constants import CV
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process
+from openpilot.system.hardware import JETSON
 from openpilot.common.transformations.orientation import rot_from_euler, euler_from_rot
 from openpilot.common.swaglog import cloudlog
 
@@ -259,7 +260,7 @@ class Calibrator:
 
 
 def main() -> NoReturn:
-  config_realtime_process([0, 1, 2, 3], 5)
+  config_realtime_process(7 if JETSON else [0, 1, 2, 3], 5)
 
   pm = messaging.PubMaster(['liveCalibration'])
   sm = messaging.SubMaster(['cameraOdometry', 'carState'], poll='cameraOdometry')

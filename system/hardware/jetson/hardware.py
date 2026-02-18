@@ -189,6 +189,13 @@ class Jetson(HardwareBase):
     except Exception:
       self.dfs = None
 
+    # Initialize huge pages for CUDA memory (5-10% TLB improvement)
+    try:
+      from openpilot.system.hardware.jetson.hugepages import initialize as init_hugepages
+      init_hugepages()
+    except Exception:
+      pass
+
   def _jetson_clocks_watchdog(self):
     """Re-apply jetson_clocks if thermal throttling undoes frequency lock."""
     while not self._watchdog_stop.is_set():

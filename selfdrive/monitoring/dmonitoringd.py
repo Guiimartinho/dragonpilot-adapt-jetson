@@ -2,11 +2,12 @@
 import cereal.messaging as messaging
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process
+from openpilot.system.hardware import JETSON
 from openpilot.selfdrive.monitoring.helpers import DriverMonitoring
 
 
 def dmonitoringd_thread():
-  config_realtime_process([0, 1, 2, 3], 5)
+  config_realtime_process(7 if JETSON else [0, 1, 2, 3], 5)
 
   params = Params()
   pm = messaging.PubMaster(['driverMonitoringState'])

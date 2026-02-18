@@ -14,11 +14,28 @@ common_src = [
   "transforms/transform.cc",
 ]
 
+# Jetson: compile CUDA kernels natively (replaces OpenCL kernels for preprocessing)
+cuda_objects = []
+if arch == "jarch64":
+  cuda_env = lenv.Clone()
+  cuda_env['NVCCFLAGS'] = ['-arch=sm_72', '-O3', '--use_fast_math', '-Xcompiler', '-fPIC']
+  for cu_file in ['transforms/transform.cu', 'transforms/loadyuv.cu']:
+    obj = cuda_env.Command(
+      cu_file.replace('.cu', '.o'),
+      cu_file,
+      f'nvcc -arch=sm_72 -O3 --use_fast_math -Xcompiler -fPIC -c -o $TARGET $SOURCE'
+    )
+    cuda_objects.append(obj)
+
 # OpenCL is a framework on Mac
 if arch == "Darwin":
   frameworks += ['OpenCL']
 else:
   libs += ['OpenCL']
+
+# Jetson: link CUDA runtime for native kernels
+if arch == "jarch64":
+  libs += ['cudart']
 
 # Set path definitions
 for pathdef, fn in {'TRANSFORM': 'transforms/transform.cl', 'LOADYUV': 'transforms/loadyuv.cl'}.items():
@@ -27,7 +44,7 @@ for pathdef, fn in {'TRANSFORM': 'transforms/transform.cl', 'LOADYUV': 'transfor
 
 # Compile cython
 cython_libs = envCython["LIBS"] + libs
-commonmodel_lib = lenv.Library('commonmodel', common_src)
+commonmodel_lib = lenv.Library('commonmodel', common_src + cuda_objects)
 lenvCython.Program('models/commonmodel_pyx.so', 'models/commonmodel_pyx.pyx', LIBS=[commonmodel_lib, *cython_libs], FRAMEWORKS=frameworks)
 tinygrad_files = ["#"+x for x in glob.glob(env.Dir("#tinygrad_repo").relpath + "/**", recursive=True, root_dir=env.Dir("#").abspath) if 'pycache' not in x]
 

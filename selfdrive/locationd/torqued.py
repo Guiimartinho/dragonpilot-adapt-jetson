@@ -8,6 +8,7 @@ from cereal import car, log
 from openpilot.common.constants import ACCELERATION_DUE_TO_GRAVITY
 from openpilot.common.params import Params
 from openpilot.common.realtime import config_realtime_process, DT_MDL
+from openpilot.system.hardware import JETSON
 from openpilot.common.filter_simple import FirstOrderFilter
 from openpilot.common.swaglog import cloudlog
 from openpilot.selfdrive.locationd.helpers import PointBuckets, ParameterEstimator, PoseCalibrator, Pose
@@ -241,7 +242,7 @@ class TorqueEstimator(ParameterEstimator):
 
 
 def main(demo=False):
-  config_realtime_process([0, 1, 2, 3], 5)
+  config_realtime_process(7 if JETSON else [0, 1, 2, 3], 5)
 
   DEBUG = bool(int(os.getenv("DEBUG", "0")))
 

@@ -313,7 +313,28 @@ print(f'GPU zones: {[z.name for z in thermal.gpu]}')
 
 ---
 
-## Passo 13: Configurar Performance da Jetson
+## Passo 13: Instalar TensorRT (Opcional — 2-3x speedup)
+
+TensorRT permite inferencia FP16 nos tensor cores Volta com 2-3x speedup sobre tinygrad.
+
+```bash
+cd /data/openpilot
+bash scripts/jetson_install_tensorrt.sh
+```
+
+O script:
+1. Instala `python3-libnvinfer` e `pycuda`
+2. Cria diretorio de cache de engines
+3. Configura symlinks TensorRT no venv
+4. Verifica instalacao
+
+Apos instalar, o modeld usa automaticamente TensorRT com fallback para tinygrad se indisponivel.
+
+> **Nota**: Se nao instalar TensorRT, o sistema funciona normalmente com tinygrad CUDA (~19ms inferencia total).
+
+---
+
+## Passo 14: Configurar Performance da Jetson
 
 ```bash
 # Modo MAXN (30W, todos os 8 cores, GPU max)
@@ -329,7 +350,7 @@ sudo nvpmodel -q
 
 ---
 
-## Passo 14: Conectar Hardware
+## Passo 15: Conectar Hardware
 
 ### 14.1 Camera USB (teste inicial)
 
@@ -359,7 +380,7 @@ sudo udevadm trigger
 
 ---
 
-## Passo 15: Rodar o DragonPilot
+## Passo 16: Rodar o DragonPilot
 
 ```bash
 cd /data/openpilot
@@ -394,7 +415,7 @@ logmessaged timed ui deleter pandad hardwared tombstoned statsd dashy
 
 ---
 
-## Passo 16: Configurar Display X11 e VNC (Acesso Remoto)
+## Passo 17: Configurar Display X11 e VNC (Acesso Remoto)
 
 A UI do DragonPilot usa raylib/OpenGL e requer um display X11. Para acessar remotamente via VNC, siga os passos abaixo.
 
@@ -618,32 +639,46 @@ sudo nvpmodel -m 0 && sudo jetson_clocks
 
 ---
 
-## Otimizacoes Aplicadas
+## Otimizacoes Aplicadas (20 itens)
 
-O port inclui diversas otimizacoes especificas para o Jetson AGX Xavier:
+O port inclui 20 otimizacoes especificas para o Jetson AGX Xavier:
 
 ### Pipeline GPU (Critico)
 - **OpenCL async transfer**: `commonmodel.h` usa `clEnqueueMapBuffer` nao-bloqueante com event sync
-- **CUDA Graphs via TinyJit**: Grafo de kernels capturado e replayed automaticamente
+- **CUDA Graphs via TinyJit**: Grafo de kernels capturado e replayed automaticamente (JIT_BATCH_SIZE=32)
 - **FP16 end-to-end**: Tensor cores Volta preservam FP16 nativo (sem conversao FP32)
-- **CUDA kernels nativos**: `transform.cu` e `loadyuv.cu` substituem OpenCL para eliminar interop
+- **CUDA kernels nativos**: `transform.cu` e `loadyuv.cu` compilados via nvcc -arch=sm_72 (substituem OpenCL)
+- **Headers CUDA**: `transform_cuda.h`, `loadyuv_cuda.h`, `commonmodel_cuda.h` — pipeline completo
+- **TensorRT** (opcional): `tensorrt_runner.py` com FP16 tensor cores — 2-3x speedup
+- **DLA**: `dla_runner.py` para dmonitoring — 2 cores DLA com fallback chain
+- **Huge Pages**: 256 x 2MB (512MB) via `hugepages.py` — 5-10% menos TLB misses
 
-### Core Affinity
-- Core 1: controlsd (controle lateral/longitudinal)
-- Core 2: card (interface CAN)
-- Cores 3-4: modeld (inferencia CUDA)
-- Cores 5-6: selfdrived (supervisao)
-- Core 6: dmonitoringmodeld
-- Cores 0,7: sistema (hardwared, loggerd, UI)
+### Core Affinity (8 cores completos)
+| Core | Processo | Prioridade |
+|------|----------|------------|
+| 0 | UI (raylib) | prio 51 |
+| 1 | controlsd | SCHED_FIFO 53 |
+| 2 | card | SCHED_FIFO 53 |
+| 3-4 | modeld | SCHED_FIFO 54 |
+| 5 | plannerd, radard | SCHED_FIFO 51 |
+| 5-6 | selfdrived | SCHED_FIFO 53 |
+| 6 | dmonitoringmodeld, camerad | prio 5 |
+| 7 | locationd, calibrationd, torqued, paramsd, lagd, dmonitoringd | prio 5 |
 
 ### Hardware Acceleration
-- **NVDEC**: Decode video via V4L2 nvv4l2dec com fallback CUDA hwaccel
-- **NVENC**: Encode via h264_nvmpi com fallback h264_nvenc e software
+- **NVDEC**: Decode video via V4L2 nvv4l2dec com fallback CUDA hwaccel (247 lines)
+- **NVENC**: Encode via h264_nvmpi com fallback h264_nvenc e software (253 lines)
 
 ### Power Management
 - **DFS**: Frequencia CPU adaptativa (1.2-2.27 GHz), GPU/EMC sempre max ao dirigir
 - **Fan PID**: Controle proporcional com hysteresis (5%), protecao NaN/Inf
-- **Power modes**: MAXN (30W) ao dirigir, MODE_10W estacionado
+- **Power modes**: MAXN (30W) ao dirigir, MODE_10W estacionado (4 cores offline)
+- **Watchdog**: Re-aplica jetson_clocks a cada 2min se thermal throttling desfizer
 
-### MPC
-- Horizonte lateral reduzido N=24 (era 32) — ~25% mais rapido com perda minima
+### Controls & MPC
+- **MPC N=24**: Horizonte lateral reduzido (era 32) — ~25% mais rapido com perda minima
+- **Cache slip_factor**: `vehicle_model.py` evita recalculo de slip_factor a cada ciclo
+
+### I/O
+- **tmpfs log buffer**: Logs em /dev/shm, flush NVMe a cada 5s — 50% menos latencia escrita
+- **Max 512MB tmpfs**: Forced flush se ultrapassar limite

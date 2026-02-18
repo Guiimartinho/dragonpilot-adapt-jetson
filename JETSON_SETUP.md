@@ -62,7 +62,7 @@ cd /data/openpilot
 ```
 O script `jetson_replay.sh` faz tudo automaticamente:
 - Desabilita DPMS
-- Inicia VNC na porta 5900 (scale 0.4 = 768x384)
+- Inicia VNC na porta 5900 (scale 0.5 = 960x480)
 - Limpa shared memory stale
 - Inicia replay com os argumentos passados
 - Aguarda VisionIPC ficar pronto
@@ -75,8 +75,8 @@ cd /data/openpilot && source launch_env.sh
 # Desabilitar DPMS
 DISPLAY=:0 xset s off && DISPLAY=:0 xset -dpms && DISPLAY=:0 xset s noblank
 
-# VNC (scale 0.4, low-CPU mode)
-x11vnc -display :0 -clip 1920x960+0+60 -scale 0.4 \
+# VNC (scale 0.5, low-CPU mode)
+x11vnc -display :0 -clip 1920x960+0+60 -scale 0.5 \
        -rfbport 5900 -forever -shared -nopw \
        -wait 50 -defer 30 -noxdamage -nocursor -norepeat \
        -bg -o /tmp/x11vnc.log
@@ -107,7 +107,7 @@ tail -5 /tmp/stress_test/ui.log     # FPS da UI
 ```
 O stress test inclui watchdog que reinicia processos se morrerem ou a UI travar em 1fps.
 
-**VNC Client**: conectar em `192.168.3.152:5900` (imagem 768x384)
+**VNC Client**: conectar em `192.168.3.152:5900` (imagem 960x480)
 
 ## Parametros da UI
 | Parametro | Valor | Descricao |
@@ -115,7 +115,7 @@ O stress test inclui watchdog que reinicia processos se morrerem ou a UI travar 
 | `BIG=1` | Ativa 2160x1080 base | Resolucao nativa openpilot |
 | `SCALE=0.889` | 1920/2160 | Escala para caber em 1920x1080 |
 | `DISPLAY=:0` | Xorg com NVIDIA | GPU acelerada (60 FPS) |
-| x11vnc `-scale 0.4` | 768x384 | Tamanho compacto no VNC |
+| x11vnc `-scale 0.5` | 960x480 | Tamanho compacto no VNC |
 | x11vnc `-clip 1920x960+0+60` | Crop da UI | Captura so a area util |
 
 ## Flags de Compilacao Jetson (tinygrad)
@@ -139,9 +139,25 @@ O stress test inclui watchdog que reinicia processos se morrerem ou a UI travar 
 | **x11vnc CPU** | ~2% (idle) / ~29% (streaming) |
 | **Vision model** | ~8.8ms (122 kernels, 3 CUDA graphs) |
 
+## Instalar TensorRT (Opcional - 2-3x speedup na inferencia)
+
+```bash
+cd /data/openpilot
+bash scripts/jetson_install_tensorrt.sh
+```
+
+O script instala `python3-libnvinfer`, `pycuda`, cria cache de engines e configura symlinks no venv.
+Apos instalar, o modeld usa automaticamente TensorRT com fallback para tinygrad.
+
 ## Specs Confirmados
 - **GPU**: NVIDIA Volta (GV10B), 512 CUDA cores, 64 tensor cores, driver tegra 35.6.2
 - **Direct rendering**: Yes (NVIDIA GLX)
 - **Replay**: loop automatico da rota demo, VisionIPC em `/tmp/visionipc_camerad`
-- **NVDEC disponivel**: h264_nvv4l2dec, hevc_nvv4l2dec (futuro)
-- **TensorRT**: disponivel quando `python3-libnvinfer` for instalado (fallback automatico para tinygrad)
+- **NVDEC**: h264_nvv4l2dec, hevc_nvv4l2dec — decode hardware ativo em replay
+- **NVENC**: h264_nvmpi / h264_nvenc — encode hardware ativo em loggerd
+- **TensorRT**: disponivel via `scripts/jetson_install_tensorrt.sh` (fallback automatico para tinygrad)
+- **DLA**: 2 cores disponíveis para dmonitoring model (fallback DLA0→DLA1→GPU→tinygrad)
+- **CUDA kernels nativos**: transform.cu e loadyuv.cu compilados via nvcc (substituem OpenCL)
+- **Huge Pages**: 512MB (256 x 2MB) para CUDA TLB — 5-10% melhoria
+- **tmpfs logs**: Logs escritos em /dev/shm, flush para NVMe a cada 5s — 50% menos latencia I/O
+- **Core affinity**: 8 cores mapeados — SCHED_FIFO real-time scheduling

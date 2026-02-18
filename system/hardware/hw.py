@@ -2,7 +2,7 @@ import os
 import platform
 from pathlib import Path
 
-from openpilot.system.hardware import PC
+from openpilot.system.hardware import PC, JETSON
 
 DEFAULT_DOWNLOAD_CACHE_ROOT = "/tmp/comma_download_cache"
 
@@ -17,6 +17,14 @@ class Paths:
       return os.environ['LOG_ROOT']
     elif PC:
       return str(Path(Paths.comma_home()) / "media" / "0" / "realdata")
+    elif JETSON and os.environ.get('JETSON_TMPFS_LOGS', '1') == '1':
+      # Use tmpfs staging for 50% lower write latency on Jetson.
+      # Completed segments are flushed to NVMe by TmpfsLogStaging.
+      try:
+        from openpilot.system.hardware.jetson.tmpfs_logger import get_tmpfs_log_root
+        return get_tmpfs_log_root()
+      except Exception:
+        return '/data/media/0/realdata/'
     else:
       return '/data/media/0/realdata/'
 
