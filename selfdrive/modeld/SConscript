@@ -33,9 +33,17 @@ if arch == "Darwin":
 else:
   libs += ['OpenCL']
 
-# Jetson: link CUDA runtime for native kernels
+# Jetson: link CUDA runtime for native kernels + build TensorRT C bridge
 if arch == "jarch64":
   libs += ['cudart']
+
+  # Build trt_runtime.so: C bridge library for TensorRT inference via ctypes
+  trt_env = lenv.Clone()
+  trt_runtime = trt_env.Command(
+    'runners/trt_runtime.so',
+    'runners/trt_runtime.cpp',
+    'g++ -shared -fPIC -O2 -I/usr/local/cuda/include -o $TARGET $SOURCE -lnvinfer -lcudart -L/usr/local/cuda/lib64'
+  )
 
 # Set path definitions
 for pathdef, fn in {'TRANSFORM': 'transforms/transform.cl', 'LOADYUV': 'transforms/loadyuv.cl'}.items():

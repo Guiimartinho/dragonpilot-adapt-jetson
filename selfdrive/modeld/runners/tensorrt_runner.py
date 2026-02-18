@@ -1,12 +1,15 @@
 """
 TensorRT inference runner for Jetson AGX Xavier.
 
-Builds TensorRT engines from ONNX models with FP16 precision for Volta tensor cores.
-Supports engine caching to avoid rebuild on every boot.
-Falls back gracefully to tinygrad if TensorRT is unavailable.
+Uses ctypes to interface with trt_runtime.so (C++ bridge library)
+that wraps the TensorRT C++ API directly, bypassing the Python 3.8-only
+tensorrt package that is incompatible with our Python 3.11 venv.
+
+Engine building uses trtexec CLI. Runtime inference uses the TRT C++ API.
 """
 
 import os
+import ctypes
 import hashlib
 import logging
 from pathlib import Path
@@ -20,9 +23,90 @@ logger = logging.getLogger(__name__)
 ENGINE_CACHE_DIR = Path(os.getenv("TRT_ENGINE_CACHE", "/data/trt_engines"))
 
 # Build configuration
-MAX_WORKSPACE_SIZE = 1 << 30  # 1 GB workspace
 FP16_ENABLED = True
 DLA_CORE = -1  # -1 = GPU only, 0 or 1 = DLA core index
+MAX_WORKSPACE_MB = 1024  # 1 GB workspace
+
+# TRT dtype code -> numpy dtype (must match trt_runtime.cpp IOTensor.dtype)
+_TRT_DTYPE_MAP = {
+  0: np.float32,   # kFLOAT
+  1: np.float16,   # kHALF
+  2: np.int8,      # kINT8
+  3: np.int32,     # kINT32
+  4: np.uint8,     # kUINT8
+}
+
+# Paths to search for the compiled C bridge library
+_LIB_SEARCH_PATHS = [
+  Path(__file__).parent / 'trt_runtime.so',
+  Path('/data/openpilot/selfdrive/modeld/runners/trt_runtime.so'),
+]
+
+_lib: Optional[ctypes.CDLL] = None
+
+
+def _load_lib() -> ctypes.CDLL:
+  global _lib
+  if _lib is not None:
+    return _lib
+
+  for p in _LIB_SEARCH_PATHS:
+    if p.exists():
+      _lib = ctypes.CDLL(str(p))
+      _setup_prototypes(_lib)
+      logger.info("Loaded trt_runtime.so from %s", p)
+      return _lib
+
+  raise RuntimeError(
+    "trt_runtime.so not found. Build with:\n"
+    "  g++ -shared -fPIC -O2 -o trt_runtime.so trt_runtime.cpp -lnvinfer -lcudart"
+  )
+
+
+def _setup_prototypes(lib: ctypes.CDLL):
+  """Set ctypes function signatures for type safety."""
+  lib.trt_load_engine.argtypes = [ctypes.c_char_p]
+  lib.trt_load_engine.restype = ctypes.c_void_p
+
+  lib.trt_num_io.argtypes = [ctypes.c_void_p]
+  lib.trt_num_io.restype = ctypes.c_int
+
+  lib.trt_tensor_name.argtypes = [ctypes.c_void_p, ctypes.c_int]
+  lib.trt_tensor_name.restype = ctypes.c_char_p
+
+  lib.trt_tensor_is_input.argtypes = [ctypes.c_void_p, ctypes.c_int]
+  lib.trt_tensor_is_input.restype = ctypes.c_int
+
+  lib.trt_tensor_size.argtypes = [ctypes.c_void_p, ctypes.c_int]
+  lib.trt_tensor_size.restype = ctypes.c_int64
+
+  lib.trt_tensor_dtype.argtypes = [ctypes.c_void_p, ctypes.c_int]
+  lib.trt_tensor_dtype.restype = ctypes.c_int
+
+  lib.trt_tensor_ndims.argtypes = [ctypes.c_void_p, ctypes.c_int]
+  lib.trt_tensor_ndims.restype = ctypes.c_int
+
+  lib.trt_tensor_dim.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int]
+  lib.trt_tensor_dim.restype = ctypes.c_int
+
+  lib.trt_set_input.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_int64]
+  lib.trt_set_input.restype = None
+
+  lib.trt_execute.argtypes = [ctypes.c_void_p]
+  lib.trt_execute.restype = None
+
+  lib.trt_get_output.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_void_p, ctypes.c_int64]
+  lib.trt_get_output.restype = None
+
+  lib.trt_sync.argtypes = [ctypes.c_void_p]
+  lib.trt_sync.restype = None
+
+  lib.trt_destroy.argtypes = [ctypes.c_void_p]
+  lib.trt_destroy.restype = None
+
+  lib.trt_build_engine.argtypes = [ctypes.c_char_p, ctypes.c_char_p,
+                                    ctypes.c_int, ctypes.c_int, ctypes.c_int]
+  lib.trt_build_engine.restype = ctypes.c_int
 
 
 def _get_onnx_hash(onnx_path: str) -> str:
@@ -44,7 +128,10 @@ def _engine_cache_path(onnx_path: str, dla_core: int = -1) -> Path:
 
 class TensorRTRunner:
   """
-  TensorRT inference runner with FP16 support and engine caching.
+  TensorRT inference runner using ctypes bridge to trt_runtime.so.
+
+  Bypasses the Python 3.8-only tensorrt package by calling TRT C++ API
+  through plain C functions exposed via ctypes.
 
   Usage:
     runner = TensorRTRunner(onnx_path, fp16=True)
@@ -52,214 +139,117 @@ class TensorRTRunner:
   """
 
   def __init__(self, onnx_path: str, fp16: bool = FP16_ENABLED,
-               dla_core: int = DLA_CORE, max_workspace: int = MAX_WORKSPACE_SIZE):
-    try:
-      import tensorrt as trt
-    except ImportError:
-      raise ImportError(
-        "tensorrt package not found. Install with: "
-        "sudo apt-get install python3-libnvinfer python3-libnvinfer-dev"
-      )
-
-    self.trt = trt
+               dla_core: int = DLA_CORE, max_workspace_mb: int = MAX_WORKSPACE_MB):
+    self._lib = _load_lib()
     self.onnx_path = onnx_path
     self.fp16 = fp16
     self.dla_core = dla_core
-    self.max_workspace = max_workspace
+    self.max_workspace_mb = max_workspace_mb
+    self._ctx = None
 
-    self._logger = trt.Logger(trt.Logger.WARNING)
-    self._runtime = trt.Runtime(self._logger)
-    self._engine: Optional[trt.ICudaEngine] = None
-    self._context: Optional[trt.IExecutionContext] = None
-
-    # CUDA stream and device memory
-    self._stream = None
-    self._d_inputs: dict[str, int] = {}
-    self._d_outputs: dict[str, int] = {}
-    self._h_outputs: dict[str, np.ndarray] = {}
-    self._bindings: list[int] = []
+    # IO tensor metadata
+    self._inputs: dict[str, tuple] = {}   # name -> (index, shape, np_dtype, size_bytes)
+    self._outputs: dict[str, tuple] = {}  # name -> (index, shape, np_dtype, size_bytes)
+    self._h_outputs: dict[str, np.ndarray] = {}  # pre-allocated host output buffers
 
     self._build_or_load_engine()
 
   def _build_or_load_engine(self):
-    """Load cached engine or build from ONNX."""
-    import tensorrt as trt
-    try:
-      import pycuda.driver as cuda
-      import pycuda.autoinit  # noqa: F401
-    except ImportError:
-      raise ImportError(
-        "pycuda package not found. Install with: pip install pycuda"
-      )
-
+    """Load cached engine or build from ONNX via trtexec."""
     cache_path = _engine_cache_path(self.onnx_path, self.dla_core)
 
-    if cache_path.exists():
-      logger.info("Loading cached TensorRT engine: %s", cache_path)
-      with open(cache_path, "rb") as f:
-        engine_data = f.read()
-      self._engine = self._runtime.deserialize_cuda_engine(engine_data)
-      if self._engine is not None:
-        self._setup_context(cuda)
-        return
-      logger.warning("Failed to deserialize cached engine, rebuilding")
+    if not cache_path.exists():
+      logger.info("Building TRT engine from %s (fp16=%s, dla=%d)",
+                  self.onnx_path, self.fp16, self.dla_core)
+      ENGINE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+      ret = self._lib.trt_build_engine(
+        self.onnx_path.encode(),
+        str(cache_path).encode(),
+        1 if self.fp16 else 0,
+        self.dla_core,
+        self.max_workspace_mb
+      )
+      if ret != 0:
+        raise RuntimeError(f"trtexec engine build failed (exit code {ret}) for {self.onnx_path}")
+      logger.info("TRT engine cached to: %s", cache_path)
+    else:
+      logger.info("Loading cached TRT engine: %s", cache_path)
 
-    logger.info("Building TensorRT engine from: %s (fp16=%s, dla=%d)",
-                self.onnx_path, self.fp16, self.dla_core)
-    self._engine = self._build_engine(trt)
+    self._ctx = self._lib.trt_load_engine(str(cache_path).encode())
+    if not self._ctx:
+      # Cache might be stale, try rebuilding
+      logger.warning("Failed to load cached engine, rebuilding")
+      cache_path.unlink(missing_ok=True)
+      ret = self._lib.trt_build_engine(
+        self.onnx_path.encode(),
+        str(cache_path).encode(),
+        1 if self.fp16 else 0,
+        self.dla_core,
+        self.max_workspace_mb
+      )
+      if ret != 0:
+        raise RuntimeError(f"trtexec rebuild failed (exit code {ret})")
+      self._ctx = self._lib.trt_load_engine(str(cache_path).encode())
+      if not self._ctx:
+        raise RuntimeError(f"Failed to load rebuilt TRT engine: {cache_path}")
 
-    # Cache the engine
-    ENGINE_CACHE_DIR.mkdir(parents=True, exist_ok=True)
-    serialized = self._engine.serialize()
-    with open(cache_path, "wb") as f:
-      f.write(serialized)
-    logger.info("Cached TensorRT engine to: %s", cache_path)
+    self._setup_io()
 
-    self._setup_context(cuda)
-
-  def _build_engine(self, trt):
-    """Build TensorRT engine from ONNX with FP16/DLA support."""
-    builder = trt.Builder(self._logger)
-    network = builder.create_network(1 << int(trt.NetworkDefinitionCreationFlag.EXPLICIT_BATCH))
-    parser = trt.OnnxParser(network, self._logger)
-
-    with open(self.onnx_path, "rb") as f:
-      if not parser.parse(f.read()):
-        for i in range(parser.num_errors):
-          logger.error("ONNX parse error: %s", parser.get_error(i))
-        raise RuntimeError(f"Failed to parse ONNX model: {self.onnx_path}")
-
-    config = builder.create_builder_config()
-    config.set_memory_pool_limit(trt.MemoryPoolType.WORKSPACE, self.max_workspace)
-
-    # FP16 mode for Volta tensor cores (sm_72)
-    if self.fp16 and builder.platform_has_fast_fp16:
-      config.set_flag(trt.BuilderFlag.FP16)
-      logger.info("FP16 mode enabled for Volta tensor cores")
-
-    # DLA configuration
-    if self.dla_core >= 0:
-      if builder.num_DLA_cores > self.dla_core:
-        config.default_device_type = trt.DeviceType.DLA
-        config.DLA_core = self.dla_core
-        config.set_flag(trt.BuilderFlag.GPU_FALLBACK)
-        # DLA requires FP16 or INT8
-        if not config.get_flag(trt.BuilderFlag.FP16):
-          config.set_flag(trt.BuilderFlag.FP16)
-        logger.info("DLA core %d enabled with GPU fallback", self.dla_core)
-      else:
-        logger.warning("DLA core %d not available (%d cores found), using GPU",
-                       self.dla_core, builder.num_DLA_cores)
-
-    engine = builder.build_serialized_network(network, config)
-    if engine is None:
-      raise RuntimeError("TensorRT engine build failed")
-    return self._runtime.deserialize_cuda_engine(engine)
-
-  def _setup_context(self, cuda):
-    """Allocate device memory and create execution context."""
-    self._stream = cuda.Stream()
-    self._context = self._engine.create_execution_context()
-
-    num_io = self._engine.num_io_tensors
-    self._bindings = [0] * num_io
-
+  def _setup_io(self):
+    """Query engine IO tensors and pre-allocate output buffers."""
+    num_io = self._lib.trt_num_io(self._ctx)
     for i in range(num_io):
-      name = self._engine.get_tensor_name(i)
-      shape = self._engine.get_tensor_shape(name)
-      dtype = self._engine.get_tensor_dtype(name)
-      np_dtype = self._trt_dtype_to_numpy(dtype)
-      size = int(np.prod(shape)) * np.dtype(np_dtype).itemsize
+      name = self._lib.trt_tensor_name(self._ctx, i).decode()
+      is_input = self._lib.trt_tensor_is_input(self._ctx, i)
+      ndims = self._lib.trt_tensor_ndims(self._ctx, i)
+      shape = tuple(self._lib.trt_tensor_dim(self._ctx, i, d) for d in range(ndims))
+      dtype_code = self._lib.trt_tensor_dtype(self._ctx, i)
+      np_dtype = _TRT_DTYPE_MAP.get(dtype_code, np.float32)
+      size_bytes = self._lib.trt_tensor_size(self._ctx, i)
 
-      if self._engine.get_tensor_mode(name) == self.trt.TensorIOMode.INPUT:
-        d_mem = cuda.mem_alloc(size)
-        self._d_inputs[name] = d_mem
-        self._bindings[i] = int(d_mem)
-        self._context.set_tensor_address(name, int(d_mem))
+      if is_input:
+        self._inputs[name] = (i, shape, np_dtype, size_bytes)
+        logger.debug("  input[%d] '%s': shape=%s dtype=%s (%d bytes)", i, name, shape, np_dtype, size_bytes)
       else:
-        d_mem = cuda.mem_alloc(size)
-        h_mem = np.empty(tuple(shape), dtype=np_dtype)
-        self._d_outputs[name] = d_mem
-        self._h_outputs[name] = h_mem
-        self._bindings[i] = int(d_mem)
-        self._context.set_tensor_address(name, int(d_mem))
+        self._outputs[name] = (i, shape, np_dtype, size_bytes)
+        self._h_outputs[name] = np.empty(shape, dtype=np_dtype)
+        logger.debug("  output[%d] '%s': shape=%s dtype=%s (%d bytes)", i, name, shape, np_dtype, size_bytes)
 
-    logger.info("TensorRT context ready: %d inputs, %d outputs",
-                len(self._d_inputs), len(self._d_outputs))
+    logger.info("TRT engine ready: %d inputs, %d outputs", len(self._inputs), len(self._outputs))
 
   def infer(self, inputs: dict[str, np.ndarray]) -> dict[str, np.ndarray]:
-    """
-    Run inference with the TensorRT engine.
-
-    Args:
-      inputs: Dictionary mapping input tensor names to numpy arrays.
-
-    Returns:
-      Dictionary mapping output tensor names to numpy arrays.
-    """
-    import pycuda.driver as cuda
-
-    # Copy inputs to device
+    """Run inference. Copies inputs to GPU, executes, copies outputs back."""
+    # Upload inputs to device
     for name, arr in inputs.items():
-      if name not in self._d_inputs:
+      if name not in self._inputs:
         continue
-      cuda.memcpy_htod_async(self._d_inputs[name], np.ascontiguousarray(arr), self._stream)
+      idx, shape, np_dtype, size_bytes = self._inputs[name]
+      arr = np.ascontiguousarray(arr, dtype=np_dtype)
+      self._lib.trt_set_input(self._ctx, idx, arr.ctypes.data, arr.nbytes)
 
-    # Execute
-    self._context.execute_async_v3(stream_handle=self._stream.handle)
+    # Execute inference
+    self._lib.trt_execute(self._ctx)
 
-    # Copy outputs back
-    results = {}
-    for name, d_mem in self._d_outputs.items():
-      cuda.memcpy_dtoh_async(self._h_outputs[name], d_mem, self._stream)
+    # Download outputs from device
+    for name, (idx, shape, np_dtype, size_bytes) in self._outputs.items():
+      out = self._h_outputs[name]
+      self._lib.trt_get_output(self._ctx, idx, out.ctypes.data, out.nbytes)
 
-    self._stream.synchronize()
+    # Synchronize stream
+    self._lib.trt_sync(self._ctx)
 
-    for name, h_mem in self._h_outputs.items():
-      results[name] = h_mem.copy()
-
-    return results
+    return {name: arr.copy() for name, arr in self._h_outputs.items()}
 
   def get_input_shapes(self) -> dict[str, tuple]:
-    """Get the shapes of all input tensors."""
-    shapes = {}
-    for i in range(self._engine.num_io_tensors):
-      name = self._engine.get_tensor_name(i)
-      if self._engine.get_tensor_mode(name) == self.trt.TensorIOMode.INPUT:
-        shapes[name] = tuple(self._engine.get_tensor_shape(name))
-    return shapes
+    return {name: info[1] for name, info in self._inputs.items()}
 
   def get_output_shapes(self) -> dict[str, tuple]:
-    """Get the shapes of all output tensors."""
-    shapes = {}
-    for i in range(self._engine.num_io_tensors):
-      name = self._engine.get_tensor_name(i)
-      if self._engine.get_tensor_mode(name) == self.trt.TensorIOMode.OUTPUT:
-        shapes[name] = tuple(self._engine.get_tensor_shape(name))
-    return shapes
-
-  def _trt_dtype_to_numpy(self, trt_dtype) -> np.dtype:
-    """Convert TensorRT dtype to numpy dtype."""
-    import tensorrt as trt
-    mapping = {
-      trt.float32: np.float32,
-      trt.float16: np.float16,
-      trt.int8: np.int8,
-      trt.int32: np.int32,
-      trt.bool: np.bool_,
-    }
-    if hasattr(trt, 'uint8'):
-      mapping[trt.uint8] = np.uint8
-    return mapping.get(trt_dtype, np.float32)
+    return {name: info[1] for name, info in self._outputs.items()}
 
   def destroy(self):
-    """Release all TensorRT and CUDA resources."""
-    self._context = None
-    self._engine = None
-    self._d_inputs.clear()
-    self._d_outputs.clear()
-    self._h_outputs.clear()
-    self._stream = None
+    if self._ctx:
+      self._lib.trt_destroy(self._ctx)
+      self._ctx = None
 
   def __del__(self):
     self.destroy()
@@ -267,9 +257,9 @@ class TensorRTRunner:
 
 class TensorRTModelRunner:
   """
-  High-level model runner that wraps TensorRTRunner for use in modeld/dmonitoringmodeld.
+  High-level model runner wrapping TensorRTRunner for modeld/dmonitoringmodeld.
 
-  Provides the same interface as tinygrad pickle-based runners:
+  Provides the same callable interface as tinygrad pickle-based runners:
     output = runner(**inputs)  ->  numpy array
   """
 
@@ -278,8 +268,6 @@ class TensorRTModelRunner:
     self._output_name = None
 
   def __call__(self, **kwargs) -> np.ndarray:
-    """Run inference, returning concatenated outputs as a flat numpy array."""
-    # Convert any non-numpy inputs
     np_inputs = {}
     for name, val in kwargs.items():
       if hasattr(val, 'numpy'):
@@ -291,7 +279,6 @@ class TensorRTModelRunner:
 
     outputs = self._runner.infer(np_inputs)
 
-    # Return first output (models have single output tensor)
     if self._output_name is None:
       self._output_name = list(outputs.keys())[0]
     return outputs[self._output_name].flatten().astype(np.float32)

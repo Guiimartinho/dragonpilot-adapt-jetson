@@ -18,6 +18,13 @@
 #include "selfdrive/modeld/transforms/loadyuv.h"
 #include "selfdrive/modeld/transforms/transform.h"
 
+// On Jetson, also include CUDA-native preprocessing classes.
+// These use direct CUDA kernels (compiled via nvcc) instead of OpenCL via POCL,
+// eliminating the OpenCL interop overhead for GPU preprocessing.
+#ifdef __JETSON__
+#include "selfdrive/modeld/models/commonmodel_cuda.h"
+#endif
+
 class ModelFrame {
 public:
   ModelFrame(cl_device_id device_id, cl_context context) {
