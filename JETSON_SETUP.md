@@ -62,7 +62,7 @@ cd /data/openpilot
 ```
 O script `jetson_replay.sh` faz tudo automaticamente:
 - Desabilita DPMS
-- Inicia VNC na porta 5900 (scale 0.5 = 960x480)
+- Inicia VNC na porta 5900 (scale 0.4 = 768x384)
 - Limpa shared memory stale
 - Inicia replay com os argumentos passados
 - Aguarda VisionIPC ficar pronto
@@ -75,8 +75,8 @@ cd /data/openpilot && source launch_env.sh
 # Desabilitar DPMS
 DISPLAY=:0 xset s off && DISPLAY=:0 xset -dpms && DISPLAY=:0 xset s noblank
 
-# VNC (scale 0.5, low-CPU mode)
-x11vnc -display :0 -clip 1920x960+0+60 -scale 0.5 \
+# VNC (scale 0.4, low-CPU mode)
+x11vnc -display :0 -clip 1920x960+0+60 -scale 0.4 \
        -rfbport 5900 -forever -shared -nopw \
        -wait 50 -defer 30 -noxdamage -nocursor -norepeat \
        -bg -o /tmp/x11vnc.log
@@ -107,7 +107,7 @@ tail -5 /tmp/stress_test/ui.log     # FPS da UI
 ```
 O stress test inclui watchdog que reinicia processos se morrerem ou a UI travar em 1fps.
 
-**VNC Client**: conectar em `192.168.3.152:5900` (imagem 960x480)
+**VNC Client**: conectar em `192.168.3.152:5900` (imagem 768x384)
 
 ## Parametros da UI
 | Parametro | Valor | Descricao |
@@ -115,7 +115,7 @@ O stress test inclui watchdog que reinicia processos se morrerem ou a UI travar 
 | `BIG=1` | Ativa 2160x1080 base | Resolucao nativa openpilot |
 | `SCALE=0.889` | 1920/2160 | Escala para caber em 1920x1080 |
 | `DISPLAY=:0` | Xorg com NVIDIA | GPU acelerada (60 FPS) |
-| x11vnc `-scale 0.5` | 960x480 | Tamanho compacto no VNC |
+| x11vnc `-scale 0.4` | 768x384 | Tamanho compacto no VNC |
 | x11vnc `-clip 1920x960+0+60` | Crop da UI | Captura so a area util |
 
 ## Flags de Compilacao Jetson (tinygrad)

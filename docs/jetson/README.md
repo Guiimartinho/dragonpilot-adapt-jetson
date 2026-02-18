@@ -25,7 +25,7 @@ Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 | Fan controller PID | OK | Hysteresis 5%, protecao NaN/Inf |
 | tmpfs log buffer | OK | /dev/shm staging, flush NVMe 5s |
 | Huge Pages CUDA | OK | 256 x 2MB (512MB) para TLB |
-| Acesso remoto (VNC) | OK | x11vnc com clip exato na UI (960x480) |
+| Acesso remoto (VNC) | OK | x11vnc com clip exato na UI (768x384) |
 | Camera USB (webcam) | Pendente | webcamerad pronto, falta testar |
 | Panda USB (CAN) | Pendente | pandad pronto, falta conectar hardware |
 
@@ -73,7 +73,7 @@ source .venv/bin/activate
 export DISPLAY=:0 BIG=1 SCALE=0.889
 
 # Iniciar VNC + UI + Replay
-x11vnc -display :0 -forever -shared -clip 1920x960+0+60 -scale 0.5 -rfbport 5900 -bg
+x11vnc -display :0 -forever -shared -clip 1920x960+0+60 -scale 0.4 -rfbport 5900 -bg
 nohup python3 -m selfdrive.ui.ui > /tmp/ui.log 2>&1 &
 TERM=xterm ./tools/replay/replay --demo
 

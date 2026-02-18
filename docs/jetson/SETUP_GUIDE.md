@@ -445,7 +445,7 @@ x11vnc -display :0 \
   -forever \
   -shared \
   -clip 1920x960+0+60 \
-  -scale 0.5 \
+  -scale 0.4 \
   -rfbport 5900 \
   -bg \
   -o /tmp/x11vnc.log
@@ -459,7 +459,7 @@ x11vnc -display :0 \
 | `-forever` | - | Manter servidor rodando apos desconexao do cliente |
 | `-shared` | - | Permitir multiplos clientes simultaneos |
 | `-clip` | `1920x960+0+60` | Capturar apenas a area da UI: 1920x960 pixels, com offset Y=60 (pula a borda preta superior do fullscreen) |
-| `-scale` | `0.5` | Escalar para 960x480 no cliente VNC |
+| `-scale` | `0.4` | Escalar para 768x384 no cliente VNC |
 | `-rfbport` | `5900` | Porta VNC padrao |
 | `-bg` | - | Rodar em background |
 | `-o` | `/tmp/x11vnc.log` | Arquivo de log |
@@ -470,7 +470,7 @@ x11vnc -display :0 \
 > com ~60px de borda preta em cima e embaixo. O `-clip` recorta exatamente a area visivel
 > da UI, eliminando as bordas pretas.
 
-**Resolucao resultante no cliente VNC**: **960x480** (exatamente o conteudo da UI, sem cortes, sem bordas pretas).
+**Resolucao resultante no cliente VNC**: **768x384** (exatamente o conteudo da UI, sem cortes, sem bordas pretas).
 
 ### 16.4 Iniciar a UI
 
@@ -516,7 +516,7 @@ No seu PC, abra um cliente VNC (TigerVNC, RealVNC, TightVNC, etc.) e conecte em:
 192.168.3.152:5900
 ```
 
-A janela VNC mostrara a UI do DragonPilot em **960x480**, centralizada e sem cortes.
+A janela VNC mostrara a UI do DragonPilot em **768x384**, centralizada e sem cortes.
 
 ### 16.7 Script de Inicializacao Completo (VNC + UI + Replay)
 
@@ -537,7 +537,7 @@ sleep 1
 
 # 2. Iniciar VNC (clip exato na area da UI)
 x11vnc -display :0 -forever -shared \
-  -clip 1920x960+0+60 -scale 0.5 \
+  -clip 1920x960+0+60 -scale 0.4 \
   -rfbport 5900 -bg -o /tmp/x11vnc.log
 
 # 3. Iniciar UI
@@ -549,7 +549,7 @@ sleep 3
 export TERM=xterm
 nohup ./tools/replay/replay --demo > /tmp/replay.log 2>&1 &
 
-echo "VNC rodando em porta 5900 (960x480)"
+echo "VNC rodando em porta 5900 (768x384)"
 echo "UI PID: $(pgrep -f 'selfdrive.ui.ui')"
 echo "Replay PID: $(pgrep -f 'replay')"
 ```

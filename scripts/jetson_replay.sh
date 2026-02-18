@@ -48,7 +48,7 @@ trap cleanup EXIT
 # Result: ~2% CPU vs ~37% with defaults.
 if ! pgrep -f "x11vnc.*5900" > /dev/null 2>&1; then
   echo "Starting VNC server on port 5900 (low-CPU mode)..."
-  x11vnc -display :0 -clip 1920x960+0+60 -scale 0.5 \
+  x11vnc -display :0 -clip 1920x960+0+60 -scale 0.4 \
          -rfbport 5900 -forever -shared -nopw \
          -wait 50 -defer 30 \
          -noxdamage -nocursor -norepeat \
