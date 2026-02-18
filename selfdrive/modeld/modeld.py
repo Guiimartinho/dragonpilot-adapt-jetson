@@ -214,7 +214,10 @@ class ModelState:
         except Exception as e:
           cloudlog.warning("modeld: vision TRT failed (%s), using tinygrad", e)
 
-      if POLICY_ONNX_PATH.exists():
+      # NOTE: driving_policy uses LayerNormalization which requires decomposition for
+      # TRT 8.5.x. The decomposed model causes cublas runtime errors, so policy
+      # uses tinygrad. Vision (CNN) and dmonitoring (no LayerNorm) work fine with TRT.
+      if POLICY_ONNX_PATH.exists() and os.getenv("TRT_FORCE_POLICY", "0") == "1":
         try:
           self._policy_trt = TensorRTModelRunner(str(POLICY_ONNX_PATH), fp16=True)
           self._use_trt_policy = True
