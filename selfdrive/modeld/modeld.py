@@ -178,8 +178,9 @@ class ModelState:
     self.frames = {name: DrivingModelFrame(context, ModelConstants.MODEL_RUN_FREQ//ModelConstants.MODEL_CONTEXT_FREQ) for name in self.vision_input_names}
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
 
-    # policy inputs
-    self.numpy_inputs = {k: np.zeros(self.policy_input_shapes[k], dtype=np.float32) for k in self.policy_input_shapes}
+    # policy inputs: use float16 on Jetson to match tinygrad FLOAT16=1 compiled models
+    policy_dtype = np.float16 if JETSON else np.float32
+    self.numpy_inputs = {k: np.zeros(self.policy_input_shapes[k], dtype=policy_dtype) for k in self.policy_input_shapes}
     self.full_input_queues = InputQueues(ModelConstants.MODEL_CONTEXT_FREQ, ModelConstants.MODEL_RUN_FREQ, ModelConstants.N_FRAMES)
     for k in ['desire_pulse', 'features_buffer']:
       self.full_input_queues.update_dtypes_and_shapes({k: self.numpy_inputs[k].dtype}, {k: self.numpy_inputs[k].shape})
@@ -187,9 +188,9 @@ class ModelState:
 
     # img buffers are managed in openCL transform code
     self.vision_inputs: dict[str, Tensor] = {}
-    self.vision_output = np.zeros(vision_output_size, dtype=np.float32)
+    self.vision_output = np.zeros(vision_output_size, dtype=policy_dtype)
     self.policy_inputs = {k: Tensor(v, device='NPY').realize() for k,v in self.numpy_inputs.items()}
-    self.policy_output = np.zeros(policy_output_size, dtype=np.float32)
+    self.policy_output = np.zeros(policy_output_size, dtype=policy_dtype)
     self.parser = Parser()
 
     # NOTE: TRT and tinygrad CUDA contexts conflict in the same process. TRT is used
@@ -231,8 +232,8 @@ class ModelState:
 
     # TinyJit path: CUDA graph captured on run 1 (baseline), run 2 (capture), runs 3+ (replay).
     # JIT_BATCH_SIZE=32 consolidates kernels into unified graphs for minimal launch overhead.
-    # Cast to float32: with FLOAT16=1, tinygrad computes in fp16 but policy expects fp32 inputs
-    self.vision_output = self.vision_run(**self.vision_inputs).contiguous().realize().uop.base.buffer.numpy().astype(np.float32)
+    # With FLOAT16=1 on Jetson, tinygrad outputs float16 which flows to policy as float16
+    self.vision_output = self.vision_run(**self.vision_inputs).contiguous().realize().uop.base.buffer.numpy()
 
     vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(self.vision_output, self.vision_output_slices))
 
