@@ -232,8 +232,11 @@ class ModelState:
 
     # TinyJit path: CUDA graph captured on run 1 (baseline), run 2 (capture), runs 3+ (replay).
     # JIT_BATCH_SIZE=32 consolidates kernels into unified graphs for minimal launch overhead.
-    # With FLOAT16=1 on Jetson, tinygrad outputs float16 which flows to policy as float16
+    # With FLOAT16=1 on Jetson, tinygrad outputs float16 — cast to float32 for downstream
+    # numpy compatibility (np.linalg, np.polynomial don't support float16)
     self.vision_output = self.vision_run(**self.vision_inputs).contiguous().realize().uop.base.buffer.numpy()
+    if self.vision_output.dtype != np.float32:
+      self.vision_output = self.vision_output.astype(np.float32)
 
     vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(self.vision_output, self.vision_output_slices))
 
@@ -243,6 +246,8 @@ class ModelState:
     self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
 
     self.policy_output = self.policy_run(**self.policy_inputs).contiguous().realize().uop.base.buffer.numpy()
+    if self.policy_output.dtype != np.float32:
+      self.policy_output = self.policy_output.astype(np.float32)
 
     if not self._jit_warmed_up:
       self._jit_warmed_up = True
