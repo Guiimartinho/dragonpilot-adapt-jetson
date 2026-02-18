@@ -23,7 +23,7 @@ if arch == "jarch64":
     obj = cuda_env.Command(
       cu_file.replace('.cu', '_cuda.o'),
       cu_file,
-      f'nvcc -arch=sm_72 -O3 --use_fast_math -Xcompiler -fPIC -c -o $TARGET $SOURCE'
+      f'/usr/local/cuda/bin/nvcc -arch=sm_72 -O3 --use_fast_math -Xcompiler -fPIC -c -o $TARGET $SOURCE'
     )
     cuda_objects.append(obj)
 
