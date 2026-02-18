@@ -231,7 +231,8 @@ class ModelState:
 
     # TinyJit path: CUDA graph captured on run 1 (baseline), run 2 (capture), runs 3+ (replay).
     # JIT_BATCH_SIZE=32 consolidates kernels into unified graphs for minimal launch overhead.
-    self.vision_output = self.vision_run(**self.vision_inputs).contiguous().realize().uop.base.buffer.numpy()
+    # Cast to float32: with FLOAT16=1, tinygrad computes in fp16 but policy expects fp32 inputs
+    self.vision_output = self.vision_run(**self.vision_inputs).contiguous().realize().uop.base.buffer.numpy().astype(np.float32)
 
     vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(self.vision_output, self.vision_output_slices))
 
