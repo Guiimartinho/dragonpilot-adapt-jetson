@@ -57,7 +57,7 @@ TRTContext* trt_load_engine(const char* engine_path) {
   if (!ctx->runtime) { delete ctx; return nullptr; }
 
   ctx->engine = ctx->runtime->deserializeCudaEngine(data.data(), sz);
-  if (!ctx->engine) { ctx->runtime->destroy(); delete ctx; return nullptr; }
+  if (!ctx->engine) { delete ctx->runtime; delete ctx; return nullptr; }
 
   ctx->context = ctx->engine->createExecutionContext();
   cudaStreamCreate(&ctx->stream);
@@ -128,7 +128,7 @@ void trt_destroy(TRTContext* ctx) {
   cudaStreamDestroy(ctx->stream);
   delete ctx->context;
   delete ctx->engine;
-  ctx->runtime->destroy();
+  delete ctx->runtime;
   delete ctx;
 }
 
