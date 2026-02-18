@@ -21,7 +21,7 @@ if arch == "jarch64":
   cuda_env['NVCCFLAGS'] = ['-arch=sm_72', '-O3', '--use_fast_math', '-Xcompiler', '-fPIC']
   for cu_file in ['transforms/transform.cu', 'transforms/loadyuv.cu']:
     obj = cuda_env.Command(
-      cu_file.replace('.cu', '.o'),
+      cu_file.replace('.cu', '_cuda.o'),
       cu_file,
       f'nvcc -arch=sm_72 -O3 --use_fast_math -Xcompiler -fPIC -c -o $TARGET $SOURCE'
     )
