@@ -26,6 +26,11 @@ export SCALE="${SCALE:-0.889}"
 # Source openpilot environment
 source launch_env.sh
 
+# Disable DPMS and screensaver to prevent X11 blanking (causes UI 1fps)
+DISPLAY=:0 xset s off 2>/dev/null
+DISPLAY=:0 xset -dpms 2>/dev/null
+DISPLAY=:0 xset s noblank 2>/dev/null
+
 # Cleanup function
 cleanup() {
   echo "Stopping processes..."
