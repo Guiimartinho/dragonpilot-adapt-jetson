@@ -129,7 +129,7 @@ class InputQueues:
   def enqueue(self, inputs:dict[str, np.ndarray]) -> None:
     for k in inputs.keys():
       if inputs[k].dtype != self.dtypes[k]:
-        raise ValueError(f'supplied input <{k}({inputs[k].dtype})> has wrong dtype, expected {self.dtypes[k]}')
+        inputs[k] = inputs[k].astype(self.dtypes[k])
       input_shape = list(self.shapes[k])
       input_shape[1] = -1
       single_input = inputs[k].reshape(tuple(input_shape))
