@@ -44,17 +44,9 @@ from openpilot.selfdrive.modeld.models.commonmodel_pyx import DrivingModelFrame,
 from openpilot.selfdrive.modeld.runners.tinygrad_helpers import qcom_tensor_from_opencl_address
 from dragonpilot.selfdrive.controls.lib.road_edge_detector import RoadEdgeDetector
 
-# TensorRT support for Jetson (optional, falls back to tinygrad)
-USE_TENSORRT = JETSON and os.getenv("USE_TENSORRT", "1") == "1"
-_trt_available = False
-if USE_TENSORRT:
-  try:
-    from openpilot.selfdrive.modeld.runners.tensorrt_runner import TensorRTModelRunner
-    _trt_available = True
-    cloudlog.info("modeld: TensorRT runner available")
-  except ImportError:
-    cloudlog.warning("modeld: TensorRT not available, using tinygrad")
-    _trt_available = False
+# NOTE: TensorRT is used in dmonitoringmodeld (separate process) for GPU/DLA inference.
+# modeld uses tinygrad exclusively because TRT and tinygrad CUDA contexts conflict
+# when running in the same process (cublas handle invalidation).
 
 LITE = os.getenv("LITE") is not None
 
@@ -200,37 +192,13 @@ class ModelState:
     self.policy_output = np.zeros(policy_output_size, dtype=np.float32)
     self.parser = Parser()
 
-    # Initialize inference backend per model: TensorRT (preferred on Jetson) or tinygrad (fallback)
-    # Each model can independently use TRT or tinygrad
-    self._use_trt_vision = False
-    self._use_trt_policy = False
-
-    if _trt_available:
-      if VISION_ONNX_PATH.exists():
-        try:
-          self._vision_trt = TensorRTModelRunner(str(VISION_ONNX_PATH), fp16=True)
-          self._use_trt_vision = True
-          cloudlog.warning("modeld: vision TensorRT engine loaded")
-        except Exception as e:
-          cloudlog.warning("modeld: vision TRT failed (%s), using tinygrad", e)
-
-      # NOTE: driving_policy uses LayerNormalization which requires decomposition for
-      # TRT 8.5.x. The decomposed model causes cublas runtime errors, so policy
-      # uses tinygrad. Vision (CNN) and dmonitoring (no LayerNorm) work fine with TRT.
-      if POLICY_ONNX_PATH.exists() and os.getenv("TRT_FORCE_POLICY", "0") == "1":
-        try:
-          self._policy_trt = TensorRTModelRunner(str(POLICY_ONNX_PATH), fp16=True)
-          self._use_trt_policy = True
-          cloudlog.warning("modeld: policy TensorRT engine loaded")
-        except Exception as e:
-          cloudlog.warning("modeld: policy TRT failed (%s), using tinygrad", e)
-
-    if not self._use_trt_vision:
-      with open(VISION_PKL_PATH, "rb") as f:
-        self.vision_run = pickle.load(f)
-    if not self._use_trt_policy:
-      with open(POLICY_PKL_PATH, "rb") as f:
-        self.policy_run = pickle.load(f)
+    # NOTE: TRT and tinygrad CUDA contexts conflict in the same process. TRT is used
+    # only in dmonitoringmodeld (separate process). modeld uses tinygrad for both
+    # vision and policy (tinygrad CUDA graphs are already very efficient on Volta).
+    with open(VISION_PKL_PATH, "rb") as f:
+      self.vision_run = pickle.load(f)
+    with open(POLICY_PKL_PATH, "rb") as f:
+      self.policy_run = pickle.load(f)
 
     self._jit_warmed_up = False
 
@@ -261,16 +229,9 @@ class ModelState:
     if prepare_only:
       return None
 
-    if self._use_trt_vision:
-      # TensorRT path: direct ONNX → TRT engine inference with FP16 on Volta
-      vision_np_inputs = {}
-      for key, tensor in self.vision_inputs.items():
-        vision_np_inputs[key] = tensor.numpy() if hasattr(tensor, 'numpy') else np.asarray(tensor)
-      self.vision_output = self._vision_trt(**vision_np_inputs)
-    else:
-      # TinyJit path: CUDA graph captured on run 1 (baseline), run 2 (capture), runs 3+ (replay).
-      # JIT_BATCH_SIZE=32 consolidates kernels into unified graphs for minimal launch overhead.
-      self.vision_output = self.vision_run(**self.vision_inputs).contiguous().realize().uop.base.buffer.numpy()
+    # TinyJit path: CUDA graph captured on run 1 (baseline), run 2 (capture), runs 3+ (replay).
+    # JIT_BATCH_SIZE=32 consolidates kernels into unified graphs for minimal launch overhead.
+    self.vision_output = self.vision_run(**self.vision_inputs).contiguous().realize().uop.base.buffer.numpy()
 
     vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(self.vision_output, self.vision_output_slices))
 
@@ -279,17 +240,11 @@ class ModelState:
       self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
     self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
 
-    if self._use_trt_policy:
-      policy_np_inputs = {k: v.numpy() if hasattr(v, 'numpy') else np.asarray(v) for k, v in self.policy_inputs.items()}
-      self.policy_output = self._policy_trt(**policy_np_inputs)
-    else:
-      self.policy_output = self.policy_run(**self.policy_inputs).contiguous().realize().uop.base.buffer.numpy()
+    self.policy_output = self.policy_run(**self.policy_inputs).contiguous().realize().uop.base.buffer.numpy()
 
     if not self._jit_warmed_up:
       self._jit_warmed_up = True
-      vision_backend = "TensorRT" if self._use_trt_vision else "tinygrad"
-      policy_backend = "TensorRT" if self._use_trt_policy else "tinygrad"
-      backend = f"vision={vision_backend}, policy={policy_backend}"
+      backend = "tinygrad CUDA graphs"
       cloudlog.warning("modeld: warmup complete, backend: %s", backend)
     policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(self.policy_output, self.policy_output_slices))
 
