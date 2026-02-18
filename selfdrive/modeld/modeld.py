@@ -10,9 +10,8 @@ elif JETSON:
   os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
   os.environ['CUDA_VISIBLE_DEVICES'] = '0'
   os.environ.setdefault('FLOAT16', '1')  # FP16 for Volta tensor cores
-  os.environ.setdefault('CUDA_OPT', '1')  # Enable CUDA-specific optimizations in tinygrad
   os.environ.setdefault('JIT_BATCH_SIZE', '32')  # Consolidate kernels into unified CUDA graph
-  os.environ.setdefault('USE_TC', '1')  # Force tensor core usage on Volta
+  os.environ.setdefault('TC', '1')  # Enable tensor cores on Volta sm_72
 else:
   os.environ['DEV'] = 'CPU'
 USBGPU = "USBGPU" in os.environ

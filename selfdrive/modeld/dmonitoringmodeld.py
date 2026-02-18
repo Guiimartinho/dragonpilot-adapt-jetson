@@ -7,9 +7,8 @@ elif JETSON:
   os.environ['DEV'] = 'CUDA'
   os.environ['CUDA_LAUNCH_BLOCKING'] = '0'
   os.environ.setdefault('FLOAT16', '1')
-  os.environ.setdefault('CUDA_OPT', '1')
   os.environ.setdefault('JIT_BATCH_SIZE', '32')  # Consolidate kernels into unified CUDA graph
-  os.environ.setdefault('USE_TC', '1')  # Force tensor core usage on Volta
+  os.environ.setdefault('TC', '1')  # Enable tensor cores on Volta sm_72
 else:
   os.environ['DEV'] = 'CPU'
 from tinygrad.tensor import Tensor
