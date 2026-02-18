@@ -200,21 +200,32 @@ class ModelState:
     self.policy_output = np.zeros(policy_output_size, dtype=np.float32)
     self.parser = Parser()
 
-    # Initialize inference backend: TensorRT (preferred on Jetson) or tinygrad (fallback)
-    self._use_trt = False
-    if _trt_available and VISION_ONNX_PATH.exists() and POLICY_ONNX_PATH.exists():
-      try:
-        self._vision_trt = TensorRTModelRunner(str(VISION_ONNX_PATH), fp16=True)
-        self._policy_trt = TensorRTModelRunner(str(POLICY_ONNX_PATH), fp16=True)
-        self._use_trt = True
-        cloudlog.warning("modeld: TensorRT engines loaded successfully")
-      except Exception as e:
-        cloudlog.warning("modeld: TensorRT build failed (%s), falling back to tinygrad", e)
-        self._use_trt = False
+    # Initialize inference backend per model: TensorRT (preferred on Jetson) or tinygrad (fallback)
+    # Each model can independently use TRT or tinygrad
+    self._use_trt_vision = False
+    self._use_trt_policy = False
 
-    if not self._use_trt:
+    if _trt_available:
+      if VISION_ONNX_PATH.exists():
+        try:
+          self._vision_trt = TensorRTModelRunner(str(VISION_ONNX_PATH), fp16=True)
+          self._use_trt_vision = True
+          cloudlog.warning("modeld: vision TensorRT engine loaded")
+        except Exception as e:
+          cloudlog.warning("modeld: vision TRT failed (%s), using tinygrad", e)
+
+      if POLICY_ONNX_PATH.exists():
+        try:
+          self._policy_trt = TensorRTModelRunner(str(POLICY_ONNX_PATH), fp16=True)
+          self._use_trt_policy = True
+          cloudlog.warning("modeld: policy TensorRT engine loaded")
+        except Exception as e:
+          cloudlog.warning("modeld: policy TRT failed (%s), using tinygrad", e)
+
+    if not self._use_trt_vision:
       with open(VISION_PKL_PATH, "rb") as f:
         self.vision_run = pickle.load(f)
+    if not self._use_trt_policy:
       with open(POLICY_PKL_PATH, "rb") as f:
         self.policy_run = pickle.load(f)
 
@@ -247,7 +258,7 @@ class ModelState:
     if prepare_only:
       return None
 
-    if self._use_trt:
+    if self._use_trt_vision:
       # TensorRT path: direct ONNX → TRT engine inference with FP16 on Volta
       vision_np_inputs = {}
       for key, tensor in self.vision_inputs.items():
@@ -265,7 +276,7 @@ class ModelState:
       self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
     self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
 
-    if self._use_trt:
+    if self._use_trt_policy:
       policy_np_inputs = {k: v.numpy() if hasattr(v, 'numpy') else np.asarray(v) for k, v in self.policy_inputs.items()}
       self.policy_output = self._policy_trt(**policy_np_inputs)
     else:
@@ -273,7 +284,9 @@ class ModelState:
 
     if not self._jit_warmed_up:
       self._jit_warmed_up = True
-      backend = "TensorRT" if self._use_trt else "TinyJit CUDA graphs"
+      vision_backend = "TensorRT" if self._use_trt_vision else "tinygrad"
+      policy_backend = "TensorRT" if self._use_trt_policy else "tinygrad"
+      backend = f"vision={vision_backend}, policy={policy_backend}"
       cloudlog.warning("modeld: warmup complete, backend: %s", backend)
     policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(self.policy_output, self.policy_output_slices))
 

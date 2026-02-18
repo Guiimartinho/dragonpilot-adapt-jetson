@@ -25,7 +25,7 @@ ENGINE_CACHE_DIR = Path(os.getenv("TRT_ENGINE_CACHE", "/data/trt_engines"))
 # Build configuration
 FP16_ENABLED = True
 DLA_CORE = -1  # -1 = GPU only, 0 or 1 = DLA core index
-MAX_WORKSPACE_MB = 1024  # 1 GB workspace
+MAX_WORKSPACE_MB = 512  # 512 MB workspace (safe for 32GB Jetson with concurrent processes)
 
 # TRT dtype code -> numpy dtype (must match trt_runtime.cpp IOTensor.dtype)
 _TRT_DTYPE_MAP = {
@@ -109,6 +109,34 @@ def _setup_prototypes(lib: ctypes.CDLL):
   lib.trt_build_engine.restype = ctypes.c_int
 
 
+def _ensure_trt_compatible_onnx(onnx_path: str) -> str:
+  """If ONNX model has LayerNormalization (unsupported in TRT 8.5), decompose it.
+  Returns path to compatible ONNX (may be the original or a _trt.onnx variant)."""
+  try:
+    import onnx
+    model = onnx.load(onnx_path)
+    has_layernorm = any(n.op_type == 'LayerNormalization' for n in model.graph.node)
+    if not has_layernorm:
+      return onnx_path
+
+    # Create decomposed version
+    trt_onnx_path = onnx_path.replace('.onnx', '_trt.onnx')
+    if os.path.exists(trt_onnx_path):
+      # Check if it's up to date (same mtime as original or newer)
+      if os.path.getmtime(trt_onnx_path) >= os.path.getmtime(onnx_path):
+        logger.info("Using cached TRT-compatible ONNX: %s", trt_onnx_path)
+        return trt_onnx_path
+
+    logger.info("Decomposing LayerNormalization ops for TRT 8.5 compatibility")
+    from openpilot.selfdrive.modeld.runners.onnx_layernorm_decompose import decompose_layernorm
+    model = decompose_layernorm(model)
+    onnx.save(model, trt_onnx_path)
+    return trt_onnx_path
+  except ImportError:
+    logger.warning("onnx package not available, using original ONNX file")
+    return onnx_path
+
+
 def _get_onnx_hash(onnx_path: str) -> str:
   """Compute hash of ONNX file for cache invalidation."""
   h = hashlib.sha256()
@@ -141,7 +169,7 @@ class TensorRTRunner:
   def __init__(self, onnx_path: str, fp16: bool = FP16_ENABLED,
                dla_core: int = DLA_CORE, max_workspace_mb: int = MAX_WORKSPACE_MB):
     self._lib = _load_lib()
-    self.onnx_path = onnx_path
+    self.onnx_path = _ensure_trt_compatible_onnx(onnx_path)
     self.fp16 = fp16
     self.dla_core = dla_core
     self.max_workspace_mb = max_workspace_mb
