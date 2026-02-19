@@ -88,6 +88,7 @@ TRTContext* trt_load_engine(const char* engine_path) {
       case nvinfer1::DataType::kHALF:  elem_size = 2; t.dtype = 1; break;
       case nvinfer1::DataType::kINT8:  elem_size = 1; t.dtype = 2; break;
       case nvinfer1::DataType::kINT32: elem_size = 4; t.dtype = 3; break;
+      case nvinfer1::DataType::kUINT8: elem_size = 1; t.dtype = 4; break;
       default: break;
     }
     t.size_bytes = vol * elem_size;
