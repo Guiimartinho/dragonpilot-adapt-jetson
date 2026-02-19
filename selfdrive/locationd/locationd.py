@@ -255,7 +255,8 @@ def sensor_all_checks(acc_msgs, gyro_msgs, sensor_valid, sensor_recv_time, senso
 
 
 def main():
-  config_realtime_process(7 if JETSON else [0, 1, 2, 3], 5)
+  # Jetson: core 0 for estimation processes (reduce core 7 overload)
+  config_realtime_process(0 if JETSON else [0, 1, 2, 3], 5)
 
   DEBUG = bool(int(os.getenv("DEBUG", "0")))
   SIMULATION = bool(int(os.getenv("SIMULATION", "0")))

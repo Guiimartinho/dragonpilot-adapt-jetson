@@ -260,7 +260,8 @@ class Calibrator:
 
 
 def main() -> NoReturn:
-  config_realtime_process(7 if JETSON else [0, 1, 2, 3], 5)
+  # Jetson: core 0 for estimation processes (reduce core 7 overload)
+  config_realtime_process(0 if JETSON else [0, 1, 2, 3], 5)
 
   pm = messaging.PubMaster(['liveCalibration'])
   sm = messaging.SubMaster(['cameraOdometry', 'carState'], poll='cameraOdometry')

@@ -534,8 +534,8 @@ class SelfdriveD:
 
 
 def main():
-  # Jetson core affinity: selfdrived on cores 5-6 (separate from controlsd=1, card=2)
-  config_realtime_process([5, 6] if JETSON else 4, Priority.CTRL_HIGH)
+  # Jetson core affinity: selfdrived on core 5 (frees core 6 for dmonitoringmodeld)
+  config_realtime_process(5 if JETSON else 4, Priority.CTRL_HIGH)
   s = SelfdriveD()
   s.run()
 
