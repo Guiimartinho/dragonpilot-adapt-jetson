@@ -45,6 +45,18 @@ if arch == "jarch64":
     'g++ -shared -fPIC -O2 -I/usr/local/cuda/include -o $TARGET $SOURCE -lnvinfer -lcudart -L/usr/local/cuda/lib64'
   )
 
+  # Build cuda_frame_bridge.so: zero-copy CUDA preprocessing for modeld
+  # Wraps CudaDrivingModelFrame for Python ctypes access, enabling
+  # Tensor.from_blob() with CUDA device pointers (eliminates D2H + H2D roundtrip)
+  lenv.Command(
+    'models/cuda_frame_bridge.so',
+    ['models/cuda_frame_bridge.cpp'] + cuda_objects,
+    f'g++ -shared -fPIC -O2 -std=c++17 -D__JETSON__ '
+    f'-I{Dir("#").abspath} -I/usr/local/cuda/include '
+    f'-o $TARGET $SOURCES '
+    f'-lcudart -L/usr/local/cuda/lib64'
+  )
+
 # Set path definitions
 for pathdef, fn in {'TRANSFORM': 'transforms/transform.cl', 'LOADYUV': 'transforms/loadyuv.cl'}.items():
   for xenv in (lenv, lenvCython):
