@@ -9,7 +9,13 @@ import cereal.messaging as messaging
 
 
 def main():
-  config_realtime_process(5, Priority.CTRL_LOW)
+  from openpilot.system.hardware import JETSON
+  if JETSON:
+    # Jetson: pin plannerd to core 7 with other low-priority processes,
+    # avoiding contention with selfdrived (cores 5-6)
+    config_realtime_process(7, Priority.CTRL_LOW)
+  else:
+    config_realtime_process(5, Priority.CTRL_LOW)
 
   cloudlog.info("plannerd is waiting for CarParams")
   params = Params()

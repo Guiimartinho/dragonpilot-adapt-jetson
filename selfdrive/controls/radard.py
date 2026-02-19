@@ -253,7 +253,13 @@ class RadarD:
 
 # fuses camera and radar data for best lead detection
 def main() -> None:
-  config_realtime_process(5, Priority.CTRL_LOW)
+  from openpilot.system.hardware import JETSON
+  if JETSON:
+    # Jetson: pin radard to core 7 with other low-priority processes,
+    # avoiding contention with selfdrived (cores 5-6)
+    config_realtime_process(7, Priority.CTRL_LOW)
+  else:
+    config_realtime_process(5, Priority.CTRL_LOW)
 
   # wait for stats about the car to come in from controls
   cloudlog.info("radard is waiting for CarParams")
