@@ -38,10 +38,10 @@ struct CudaLoadYUVState {
   cudaStream_t stream;
   bool owns_stream;
 
-  void init(int w, int h, cudaStream_t ext_stream = nullptr) {
+  void init(int w, int h, cudaStream_t ext_stream, bool use_ext = true) {
     width = w;
     height = h;
-    if (ext_stream) {
+    if (use_ext) {
       stream = ext_stream;
       owns_stream = false;
     } else {

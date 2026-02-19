@@ -38,10 +38,10 @@ struct CudaTransform {
   cudaStream_t stream;
   bool owns_stream;
 
-  void init(cudaStream_t ext_stream = nullptr) {
+  void init(cudaStream_t ext_stream, bool use_ext = true) {
     cudaMalloc(&d_m_y, 9 * sizeof(float));
     cudaMalloc(&d_m_uv, 9 * sizeof(float));
-    if (ext_stream) {
+    if (use_ext) {
       stream = ext_stream;
       owns_stream = false;
     } else {
