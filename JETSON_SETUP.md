@@ -127,17 +127,41 @@ O stress test inclui watchdog que reinicia processos se morrerem ou a UI travar 
 | `TC=1` | Tensor Cores | Habilita 64 tensor cores Volta sm_72 |
 
 ## Benchmarks Medidos
+
+### modeld (CUDA Zero-Copy, benchmark 3min, 2639 frames)
+| Metrica | Valor |
+|---------|-------|
+| **modeld execution (median)** | **15.85ms** |
+| **modeld execution (P95)** | 16.64ms |
+| **modeld execution (P99)** | 17.49ms |
+| **Frame drops** | **0 (0.00%)** |
+| **FPS (avg)** | 14.7 |
+| **dmonitoringmodeld (median)** | 20.83ms |
+| **Melhoria vs OpenCL** | **2.9x (46ms → 16ms)** |
+
+### Sistema
 | Metrica | Valor |
 |---------|-------|
 | **UI FPS** | 50-60+ fps |
-| **GPU Load** | 6-10% (idle) / 65-90% (renderizando) |
-| **CPU Temp** | 50-54°C |
-| **GPU Temp** | 48-52°C |
-| **RAM** | ~3.2 GB / 32 GB |
+| **GPU Load** | 8.1% median / 61.6% max |
+| **CPU Load** | 16.4% median / 35.4% max |
+| **GPU Temp** | 50.4°C avg / 51.0°C max |
+| **CPU Temp** | 51.9°C avg / 53.0°C max |
+| **RAM** | ~5.5 GB / 31 GB |
 | **Replay CPU** | ~16% |
 | **UI CPU** | ~50% |
 | **x11vnc CPU** | ~2% (idle) / ~29% (streaming) |
-| **Vision model** | ~8.8ms (122 kernels, 3 CUDA graphs) |
+| **Vision inference only** | ~8.8ms (122 kernels, 3 CUDA graphs) |
+
+## Benchmark modeld
+```bash
+cd /data/openpilot
+# Rodar com replay ativo e modeld rodando
+PYTHONPATH=/data/openpilot:/data/openpilot/tinygrad_repo \
+  .venv/bin/python3 -m tools.jetson.benchmark_modeld --duration 180 --label "cuda_zerocopy"
+```
+O benchmark mede: latencia de inferencia, frame drops, uso GPU/CPU/RAM, temperaturas.
+Resultados salvos em `/tmp/benchmark_results.txt`.
 
 ## Instalar TensorRT (Opcional - 2-3x speedup na inferencia)
 

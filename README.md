@@ -22,7 +22,7 @@
 ### Running on Jetson AGX Xavier
 
 ![DragonPilot running on Jetson AGX Xavier](docs/jetson/assets/ui_running_on_jetson.png)
-*DragonPilot UI with real-time CUDA inference on Jetson AGX Xavier — driving_vision 8.7ms, driving_policy 3.3ms, dmonitoring 6.5ms (~19ms total)*
+*DragonPilot UI with real-time CUDA inference on Jetson AGX Xavier — modeld 15.85ms median (CUDA zero-copy, 2.9x faster than OpenCL)*
 
 ## About This Project
 
@@ -49,6 +49,7 @@ The Jetson AGX Xavier offers **5x the AI performance** with **8x the RAM**, maki
 | Platform Detection (`/JETSON` + `jarch64`) | Working | SConstruct, hardware init |
 | Hardware Abstraction (thermal, power, fan) | Working | Full Jetson class with INA3221 power, PWM fan, thermal zones |
 | CUDA Model Compilation (tinygrad) | Working | driving_vision, driving_policy, dmonitoring_model |
+| CUDA Zero-Copy Preprocessing | Working | 15.85ms median, 0% frame drops, Tensor.from_blob |
 | scons Build (`-j8`) | Working | All C++/Cython targets compile cleanly |
 | Core Processes (hardwared, pandad, loggerd...) | Working | All green on manager status line |
 | UI (raylib) | Requires Display | Needs X11 DISPLAY or headless mode |
@@ -161,14 +162,25 @@ dragonpilot-adapt-jetson/
 
 ## Model Performance (Jetson AGX Xavier)
 
+### modeld End-to-End (CUDA Zero-Copy, 3min benchmark)
+
+| Metric | Value |
+|--------|-------|
+| **modeld execution (median)** | **15.85ms** |
+| modeld execution (P95) | 16.64ms |
+| **Frame drops** | **0 (0.00%)** |
+| dmonitoringmodeld (median) | 20.83ms |
+| **Improvement vs OpenCL** | **2.9x faster (46ms → 16ms)** |
+
+### Individual Model Inference (tinygrad CUDA Graphs)
+
 | Model | Inference Time | Notes |
 |-------|---------------|-------|
 | driving_vision (50.3M) | **~8.7ms** | CUDA FP16, Volta tensor cores |
 | driving_policy (7.0M) | **~3.3ms** | CUDA FP16 |
 | dmonitoring_model (9.6M) | **~6.5ms** | CUDA FP16 |
-| **Total** | **~19ms** | Well under 50ms real-time target |
 
-All models compiled with `DEV=CUDA FLOAT16=1 CUDA_OPT=1 JIT_BATCH_SIZE=0` via tinygrad.
+All models compiled with `DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=32 TC=1` via tinygrad.
 
 ## Credits
 
@@ -201,7 +213,7 @@ MIT License (same as openpilot). See [LICENSE](LICENSE).
 ### Rodando na Jetson AGX Xavier
 
 ![DragonPilot rodando na Jetson AGX Xavier](docs/jetson/assets/ui_running_on_jetson.png)
-*UI do DragonPilot com inferencia CUDA em tempo real na Jetson AGX Xavier — driving_vision 8.7ms, driving_policy 3.3ms, dmonitoring 6.5ms (~19ms total)*
+*UI do DragonPilot com inferencia CUDA em tempo real na Jetson AGX Xavier — modeld 15.85ms median (CUDA zero-copy, 2.9x mais rapido que OpenCL)*
 
 ## Sobre Este Projeto
 
@@ -228,6 +240,7 @@ O Jetson AGX Xavier oferece **5x a performance de IA** com **8x a RAM**, tornand
 | Deteccao de Plataforma (`/JETSON` + `jarch64`) | Funcionando | SConstruct, hardware init |
 | Abstracao de Hardware (thermal, energia, fan) | Funcionando | Classe Jetson completa com INA3221, PWM fan, zonas termicas |
 | Compilacao de Modelos CUDA (tinygrad) | Funcionando | driving_vision, driving_policy, dmonitoring_model |
+| CUDA Zero-Copy Preprocessing | Funcionando | 15.85ms median, 0% frame drops, Tensor.from_blob |
 | Build scons (`-j8`) | Funcionando | Todos os alvos C++/Cython compilam sem erros |
 | Processos Core (hardwared, pandad, loggerd...) | Funcionando | Todos verdes na linha de status do manager |
 | UI (raylib) | Requer Display | Precisa de DISPLAY X11 ou modo headless |
@@ -323,14 +336,25 @@ USE_WEBCAM=1 python3 -c "from openpilot.system.manager.manager import main; main
 
 ## Performance dos Modelos (Jetson AGX Xavier)
 
+### modeld End-to-End (CUDA Zero-Copy, benchmark 3min)
+
+| Metrica | Valor |
+|---------|-------|
+| **modeld execution (median)** | **15.85ms** |
+| modeld execution (P95) | 16.64ms |
+| **Frame drops** | **0 (0.00%)** |
+| dmonitoringmodeld (median) | 20.83ms |
+| **Melhoria vs OpenCL** | **2.9x mais rapido (46ms → 16ms)** |
+
+### Inferencia Individual (tinygrad CUDA Graphs)
+
 | Modelo | Tempo de Inferencia | Notas |
 |--------|---------------------|-------|
 | driving_vision (50.3M) | **~8.7ms** | CUDA FP16, tensor cores Volta |
 | driving_policy (7.0M) | **~3.3ms** | CUDA FP16 |
 | dmonitoring_model (9.6M) | **~6.5ms** | CUDA FP16 |
-| **Total** | **~19ms** | Bem abaixo do target de 50ms |
 
-Todos os modelos compilados com `DEV=CUDA FLOAT16=1 CUDA_OPT=1 JIT_BATCH_SIZE=0` via tinygrad.
+Todos os modelos compilados com `DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=32 TC=1` via tinygrad.
 
 ## Aviso de Seguranca
 

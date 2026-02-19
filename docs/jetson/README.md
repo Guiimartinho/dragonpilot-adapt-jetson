@@ -11,10 +11,11 @@ Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 |------------|--------|----------|
 | Build system (`jarch64`) | OK | scons compila sem erros, nvcc para CUDA kernels |
 | Hardware abstraction | OK | Classe Jetson com thermal, fan, DFS, hugepages |
-| Inferencia CUDA (modeld) | OK | ~19ms total (vision 8.7ms + policy 3.3ms + dmon 6.5ms) |
+| Inferencia CUDA (modeld) | OK | **15.85ms median** (CUDA zero-copy, 0% frame drops, 2.9x vs OpenCL) |
 | TensorRT (opcional) | OK | Script de instalacao pronto, 2-3x speedup esperado |
 | DLA (dmonitoring) | OK | Fallback chain: DLA0→DLA1→GPU TensorRT→tinygrad |
 | CUDA kernels nativos | OK | transform.cu + loadyuv.cu compilados via nvcc |
+| CUDA zero-copy preprocessing | OK | Tensor.from_blob, default stream, lazy GPU init |
 | UI (raylib/OpenGL) | OK | 60 FPS, fullscreen, VSync, render texture |
 | Replay (NVDEC) | OK | Decode HW via V4L2/CUDA hwaccel |
 | Encoder (NVENC) | OK | h264_nvmpi / h264_nvenc |
@@ -55,12 +56,27 @@ AGNOS (custom Android)          →    JetPack 5.x (Ubuntu 20.04)
 
 ## Performance
 
+### modeld End-to-End (CUDA Zero-Copy, benchmark 3min)
+
+| Metrica | Valor |
+|---------|-------|
+| **modeld execution (median)** | **15.85ms** |
+| modeld execution (P95) | 16.64ms |
+| modeld execution (P99) | 17.49ms |
+| **Frame drops** | **0 (0.00%)** |
+| dmonitoringmodeld (median) | 20.83ms |
+| FPS (avg) | 14.7 |
+| GPU temp (max) | 51.0°C |
+| CPU temp (max) | 53.0°C |
+| **Melhoria vs OpenCL** | **2.9x (46ms → 16ms)** |
+
+### Inferencia Individual (tinygrad CUDA Graphs)
+
 | Metrica | Valor |
 |---------|-------|
 | Inferencia driving_vision | ~8.7ms |
 | Inferencia driving_policy | ~3.3ms |
 | Inferencia dmonitoring | ~6.5ms |
-| **Total inferencia** | **~19ms** (< 50ms target) |
 | UI FPS | 60 FPS (VSync) |
 | Power mode | MAXN 30W (8 cores, GPU max) |
 

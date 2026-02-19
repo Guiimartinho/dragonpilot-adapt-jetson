@@ -30,12 +30,18 @@ Hardware Xavier: 8 cores ARM Carmel 2.26GHz, 512 CUDA cores Volta sm_72, 64 tens
 | 18 | Fan controller PID | IMPLEMENTADO | Target 65C dirigindo, 70C parked, hysteresis 5% |
 | 19 | tmpfs buffer para logs | IMPLEMENTADO | /dev/shm staging com flush 5s para NVMe |
 | 20 | Huge Pages para CUDA | IMPLEMENTADO | 256 pages (512MB) + THP madvise |
+| 21 | CUDA zero-copy preprocessing | IMPLEMENTADO | 46ms→16ms (2.9x), 0% frame drops, Tensor.from_blob |
+| 22 | Benchmark script modeld | IMPLEMENTADO | tools/jetson/benchmark_modeld.py (latencia, FPS, GPU/CPU/temp) |
 
 ### Bugs corrigidos
 - `USE_TC=1` → `TC=1`: tinygrad le `ContextVar("TC", 1)`, nao `USE_TC`. Tensor cores nao estavam sendo ativados.
 - `CUDA_OPT=1` removido: nao e variavel real do tinygrad, zero efeito.
 - Zero-copy falso em commonmodel.h removido: `clEnqueueMapBuffer` com POCL sempre retorna ponteiro diferente, memcpy sempre executava. Simplificado para `clEnqueueReadBuffer` honesto.
 - DPMS X11: Standby de 600s desligava o display virtual, causando UI a 1fps.
+- CUDA stream invalidation: `cudaStreamCreate()` antes do tinygrad init criava streams que eram invalidados quando tinygrad compilava CUDA graphs. Fix: usar default stream (0) que nunca e invalidado.
+- Ring buffer temporal: implementacao errada causava output zerado. Fix: 5 slots com shift correto a cada frame.
+- Upload size YUV420: VisionBuf com padding entre Y e UV (`uv_offset > stride*height`). Fix: `uv_offset + stride*height/2`.
+- `if (ext_stream)` false para stream=0: em C++, `cudaStream_t(0)` testa como nullptr. Fix: usar `bool use_ext` flag na API.
 
 ---
 
@@ -52,7 +58,8 @@ Hardware Xavier: 8 cores ARM Carmel 2.26GHz, 512 CUDA cores Volta sm_72, 64 tens
 | 7 | NVDEC hardware decode no replay | Video | **190% CPU → 5%** | FEITO |
 | 8 | NVENC hardware encode no loggerd | Video | **80% CPU → 5%** | FEITO |
 | 9 | Kernels CUDA nativos (substituir OpenCL) | Inferencia | **12ms saved** | FEITO |
-| 10 | Fullscreen + VSync na UI | UI | **15% CPU saved** | PENDENTE |
+| 10 | CUDA zero-copy preprocessing | Inferencia | **46ms→16ms (2.9x)** | FEITO |
+| 11 | Fullscreen + VSync na UI | UI | **15% CPU saved** | PENDENTE |
 | 11 | Eliminar render texture scaling | UI | **20% GPU saved** | PENDENTE |
 | 12 | Modo parked (10W, 4 cores) | Power | **5-6W saved** | FEITO |
 | 13 | Dynamic Frequency Scaling | Power | **8W saved** | FEITO |
@@ -136,9 +143,28 @@ SConscript compila .cu com nvcc -arch=sm_72 -O3 --use_fast_math no jarch64.
 
 Pipeline CUDA nativo elimina overhead POCL/OpenCL:
 ```
-OpenCL: VisionIPC → cl_mem → POCL→CUDA warp → POCL→CUDA loadyuv → clReadBuffer → host → tinygrad
-CUDA:   VisionIPC → cudaMemcpy → CUDA warp → CUDA loadyuv → device ptr (GPU direto)
+OpenCL: VisionIPC → cl_mem → POCL→CUDA warp → POCL→CUDA loadyuv → clReadBuffer → host → tinygrad (~46ms)
+CUDA:   VisionIPC → cudaMemcpy → CUDA warp → CUDA loadyuv → device ptr → Tensor.from_blob (zero-copy, ~16ms)
 ```
+
+### 1.9 CUDA Zero-Copy Preprocessing (IMPLEMENTADO)
+
+**Arquivos**:
+- `selfdrive/modeld/models/commonmodel_cuda.h` - Pipeline completo com lazy GPU init + default stream
+- `selfdrive/modeld/models/cuda_frame_bridge.cpp` - Bridge C para ctypes Python
+- `selfdrive/modeld/modeld.py` - Tensor.from_blob() zero-copy path
+
+Elimina completamente o roundtrip OpenCL→CPU→CUDA:
+- CUDA default stream (0) para evitar invalidacao por tinygrad context
+- Lazy GPU allocation (apos tinygrad inicializar)
+- Ring buffer temporal (5 slots) para contexto multi-frame
+- `Tensor.from_blob()` do tinygrad para zero-copy GPU→GPU (sem D2H/H2D)
+- Upload padded YUV420 correto (`uv_offset + stride*height/2`)
+
+**Resultado medido (benchmark 3min, 2639 frames)**:
+- Median: 15.85ms, P95: 16.64ms, P99: 17.49ms
+- Frame drops: 0%
+- 2.9x mais rapido que OpenCL (46ms → 16ms)
 
 ### 1.8 Huge Pages para CUDA (IMPLEMENTADO)
 
@@ -318,17 +344,48 @@ Inativo durante replay (replay fornece frames via VisionIPC).
 
 ---
 
-## BENCHMARKS MEDIDOS (Stress Test 12h)
+## BENCHMARKS MEDIDOS
+
+### modeld CUDA Zero-Copy (Benchmark 3min, 2639 frames)
 
 | Metrica | Valor |
 |---------|-------|
-| **Vision inference** | 8.68-9.52ms (avg 8.85ms) |
+| **modeld execution (median)** | **15.85ms** |
+| **modeld execution (mean)** | 15.95ms |
+| **modeld execution (P95)** | 16.64ms |
+| **modeld execution (P99)** | 17.49ms |
+| **modeld execution (max)** | 21.18ms |
+| **modeld stddev** | 0.44ms |
+| **Frame drops** | **0 (0.00%)** |
+| **FPS (avg)** | 14.7 |
+| **FPS (median)** | 14.8 |
+| **dmonitoringmodeld (median)** | 20.83ms |
+| **GPU usage (median)** | 8.1% |
+| **CPU usage (median)** | 16.4% |
+| **RAM usage (avg)** | 5,552 MB / 30,991 MB |
+| **GPU Temp (max)** | 51.0°C |
+| **CPU Temp (max)** | 53.0°C |
+
+### Comparacao OpenCL vs CUDA Zero-Copy
+
+| Metrica | OpenCL (POCL) | CUDA Zero-Copy | Melhoria |
+|---------|--------------|----------------|----------|
+| modeld execution | ~46ms | **15.85ms** | **2.9x mais rapido** |
+| Frame drops | frequentes | **0%** | eliminados |
+| Pipeline | CL→CPU→CUDA roundtrip | GPU direto (zero-copy) | sem D2H/H2D |
+| Preprocessing | clReadBuffer (D2H) | Tensor.from_blob (GPU) | zero-copy |
+
+### Sistema (Stress Test 12h)
+
+| Metrica | Valor |
+|---------|-------|
+| **Vision inference only** | 8.68-9.52ms (avg 8.85ms) |
 | **Kernels** | 122 (3 CUDA graphs: 32+64+26) |
 | **UI FPS** | 50-60+ fps |
 | **GPU Load** | 6-10% (idle) / 65-90% (renderizando) |
 | **CPU Temp** | 50-54°C |
 | **GPU Temp** | 48-52°C |
-| **RAM** | ~3.2 GB / 32 GB |
+| **RAM** | ~5.5 GB / 32 GB |
 | **Replay CPU** | ~16% |
 | **UI CPU** | ~50% |
 | **x11vnc CPU** | ~2% (idle) / ~29% (streaming) |
@@ -347,7 +404,9 @@ Inativo durante replay (replay fornece frames via VisionIPC).
 | `selfdrive/modeld/transforms/loadyuv.cu` | ATIVO | Kernels CUDA YUV loading |
 | `selfdrive/modeld/transforms/transform_cuda.h` | ATIVO | Header + CudaTransform struct |
 | `selfdrive/modeld/transforms/loadyuv_cuda.h` | ATIVO | Header + CudaLoadYUVState struct |
-| `selfdrive/modeld/models/commonmodel_cuda.h` | ATIVO | Pipeline preprocessing CUDA nativo |
+| `selfdrive/modeld/models/commonmodel_cuda.h` | ATIVO | Pipeline preprocessing CUDA nativo (zero-copy, lazy init, default stream) |
+| `selfdrive/modeld/models/cuda_frame_bridge.cpp` | ATIVO | Bridge C para ctypes Python (zero-copy Tensor.from_blob) |
+| `tools/jetson/benchmark_modeld.py` | ATIVO | Benchmark modeld + dmonitoringmodeld (latencia, FPS, GPU/CPU/temp) |
 | `tools/replay/nvdec_decoder.cc` | ATIVO | NVDEC hardware decoder H.264/HEVC |
 | `tools/replay/nvdec_decoder.h` | ATIVO | Header NVDEC decoder |
 | `system/loggerd/encoder/nvenc_encoder.cc` | ATIVO | NVENC hardware encoder H.264 |
@@ -432,6 +491,16 @@ Inativo durante replay (replay fornece frames via VisionIPC).
 - [x] tmpfs buffer para logs (tmpfs_logger.py + hw.py)
 - [x] Huge Pages CUDA 512MB (hugepages.py + hardware.py)
 - [x] Script instalacao TensorRT (jetson_install_tensorrt.sh)
+
+### Semana 6: CUDA Zero-Copy + Benchmark
+- [x] CUDA zero-copy preprocessing (commonmodel_cuda.h, cuda_frame_bridge.cpp)
+- [x] Fix CUDA stream invalidation by tinygrad context (default stream 0)
+- [x] Lazy GPU memory allocation (after tinygrad init)
+- [x] Ring buffer temporal (5 slots) para contexto multi-frame
+- [x] Tensor.from_blob() zero-copy GPU→GPU path (modeld.py)
+- [x] Fix upload size para padded YUV420 (uv_offset + stride*height/2)
+- [x] Benchmark script (tools/jetson/benchmark_modeld.py)
+- [x] Resultado: 15.85ms median, 0% frame drops, 2.9x mais rapido que OpenCL
 
 ### Pendente
 - [ ] Instalar TensorRT na Jetson (`sudo ./scripts/jetson_install_tensorrt.sh`)
