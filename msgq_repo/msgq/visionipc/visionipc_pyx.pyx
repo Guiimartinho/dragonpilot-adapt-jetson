@@ -63,6 +63,10 @@ cdef class VisionBuf:
   def fd(self):
     return self.buf.fd
 
+  @property
+  def d_addr(self):
+    return <uint64_t>self.buf.d_addr if self.buf.d_addr != NULL else 0
+
 
 cdef class VisionIpcServer:
   cdef cppVisionIpcServer * server

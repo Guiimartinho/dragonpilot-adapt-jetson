@@ -21,6 +21,7 @@ cdef extern from "msgq/visionipc/visionbuf.h":
 
   cdef cppclass VisionBuf:
     void * addr
+    void * d_addr
     int fd
     size_t len
     size_t width
