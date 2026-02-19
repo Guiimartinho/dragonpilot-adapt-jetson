@@ -175,7 +175,19 @@ class ModelState:
       self.policy_output_slices = policy_metadata['output_slices']
       policy_output_size = policy_metadata['output_shapes']['outputs'][1]
 
-    self.frames = {name: DrivingModelFrame(context, ModelConstants.MODEL_RUN_FREQ//ModelConstants.MODEL_CONTEXT_FREQ) for name in self.vision_input_names}
+    # Jetson CUDA zero-copy: use native CUDA preprocessing instead of OpenCL
+    # Eliminates GPU→CPU→GPU roundtrip: data stays on GPU via Tensor.from_blob()
+    self._use_cuda_frames = False
+    if JETSON:
+      try:
+        self._init_cuda_bridge()
+        self._use_cuda_frames = True
+        cloudlog.warning("modeld: CUDA zero-copy preprocessing enabled")
+      except Exception as e:
+        cloudlog.warning(f"modeld: CUDA bridge not available ({e}), falling back to OpenCL")
+
+    if not self._use_cuda_frames:
+      self.frames = {name: DrivingModelFrame(context, ModelConstants.MODEL_RUN_FREQ//ModelConstants.MODEL_CONTEXT_FREQ) for name in self.vision_input_names}
     self.prev_desire = np.zeros(ModelConstants.DESIRE_LEN, dtype=np.float32)
 
     # policy inputs: use float16 on Jetson to match tinygrad FLOAT16=1 compiled models
@@ -203,6 +215,36 @@ class ModelState:
 
     self._jit_warmed_up = False
 
+  def _init_cuda_bridge(self):
+    """Initialize CUDA frame bridge for zero-copy GPU preprocessing on Jetson."""
+    import ctypes
+    self._ctypes = ctypes
+    bridge_path = Path(__file__).parent / 'models/cuda_frame_bridge.so'
+    self._cuda_bridge = ctypes.CDLL(str(bridge_path))
+
+    self._cuda_bridge.cuda_driving_frame_create.restype = ctypes.c_int
+    self._cuda_bridge.cuda_driving_frame_create.argtypes = [ctypes.c_int]
+    self._cuda_bridge.cuda_driving_frame_prepare.restype = ctypes.c_uint64
+    self._cuda_bridge.cuda_driving_frame_prepare.argtypes = [
+      ctypes.c_int, ctypes.c_void_p,
+      ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+      ctypes.c_void_p
+    ]
+    self._cuda_bridge.cuda_driving_frame_get_device_ptr.restype = ctypes.c_uint64
+    self._cuda_bridge.cuda_driving_frame_get_device_ptr.argtypes = [ctypes.c_int]
+    self._cuda_bridge.cuda_driving_frame_get_buf_size.restype = ctypes.c_int
+    self._cuda_bridge.cuda_driving_frame_get_buf_size.argtypes = [ctypes.c_int]
+    self._cuda_bridge.cuda_driving_frame_destroy.restype = None
+    self._cuda_bridge.cuda_driving_frame_destroy.argtypes = [ctypes.c_int]
+    self._cuda_bridge.cuda_driving_frame_get_host_buffer.restype = None
+    self._cuda_bridge.cuda_driving_frame_get_host_buffer.argtypes = [ctypes.c_int, ctypes.c_void_p, ctypes.c_int]
+
+    temporal_skip = ModelConstants.MODEL_RUN_FREQ // ModelConstants.MODEL_CONTEXT_FREQ
+    self._cuda_frame_ids = {
+      name: self._cuda_bridge.cuda_driving_frame_create(temporal_skip)
+      for name in self.vision_input_names
+    }
+
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
     return parsed_model_outputs
@@ -214,18 +256,34 @@ class ModelState:
     new_desire = np.where(inputs['desire_pulse'] - self.prev_desire > .99, inputs['desire_pulse'], 0)
     self.prev_desire[:] = inputs['desire_pulse']
 
-    imgs_cl = {name: self.frames[name].prepare(bufs[name], transforms[name].flatten()) for name in self.vision_input_names}
-
-    if TICI and not USBGPU:
-      # The imgs tensors are backed by Qualcomm opencl memory, only need init once
-      for key in imgs_cl:
-        if key not in self.vision_inputs:
-          self.vision_inputs[key] = qcom_tensor_from_opencl_address(imgs_cl[key].mem_address, self.vision_input_shapes[key], dtype=dtypes.uint8)
+    if self._use_cuda_frames:
+      # Jetson CUDA preprocessing: VisionBuf host SHM → cudaMemcpy H2D → CUDA transform+loadyuv
+      # GPU device ptr → Tensor.from_blob() (zero-copy, stays on GPU)
+      for name in self.vision_input_names:
+        buf = bufs[name]
+        proj = transforms[name].flatten()
+        dev_ptr = self._cuda_bridge.cuda_driving_frame_prepare(
+          self._cuda_frame_ids[name],
+          self._ctypes.c_void_p(buf.data.ctypes.data),
+          buf.width, buf.height, buf.stride, buf.uv_offset,
+          proj.ctypes.data_as(self._ctypes.POINTER(self._ctypes.c_float))
+        )
+        # Zero-copy: wrap CUDA device pointer as tinygrad tensor
+        buf_size = self._cuda_bridge.cuda_driving_frame_get_buf_size(self._cuda_frame_ids[name])
+        self.vision_inputs[name] = Tensor.from_blob(dev_ptr, self.vision_input_shapes[name], dtype=dtypes.uint8, device='CUDA').realize()
     else:
-      # Generic path: OpenCL buffer → CPU → Tensor (used by Jetson CUDA, PC CPU, USBGPU)
-      for key in imgs_cl:
-        frame_input = self.frames[key].buffer_from_cl(imgs_cl[key]).reshape(self.vision_input_shapes[key])
-        self.vision_inputs[key] = Tensor(frame_input, dtype=dtypes.uint8).realize()
+      imgs_cl = {name: self.frames[name].prepare(bufs[name], transforms[name].flatten()) for name in self.vision_input_names}
+
+      if TICI and not USBGPU:
+        # The imgs tensors are backed by Qualcomm opencl memory, only need init once
+        for key in imgs_cl:
+          if key not in self.vision_inputs:
+            self.vision_inputs[key] = qcom_tensor_from_opencl_address(imgs_cl[key].mem_address, self.vision_input_shapes[key], dtype=dtypes.uint8)
+      else:
+        # Generic path: OpenCL buffer → CPU → Tensor (used by PC CPU, USBGPU)
+        for key in imgs_cl:
+          frame_input = self.frames[key].buffer_from_cl(imgs_cl[key]).reshape(self.vision_input_shapes[key])
+          self.vision_inputs[key] = Tensor(frame_input, dtype=dtypes.uint8).realize()
 
     if prepare_only:
       return None
@@ -252,6 +310,8 @@ class ModelState:
     if not self._jit_warmed_up:
       self._jit_warmed_up = True
       backend = "tinygrad CUDA graphs"
+      if self._use_cuda_frames:
+        backend += " + CUDA zero-copy preprocessing"
       cloudlog.warning("modeld: warmup complete, backend: %s", backend)
     policy_outputs_dict = self.parser.parse_policy_outputs(self.slice_outputs(self.policy_output, self.policy_output_slices))
 
