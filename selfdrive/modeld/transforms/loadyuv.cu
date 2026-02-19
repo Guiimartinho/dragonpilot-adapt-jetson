@@ -59,11 +59,19 @@ __global__ void loaduv_kernel(
     int total_bytes)
 {
     const int gid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid * 8 < total_bytes) {
-        // Copy 8 bytes at a time (same as OpenCL uchar8)
-        const uint64_t* src = (const uint64_t*)(in + gid * 8);
-        uint64_t* dst = (uint64_t*)(out + out_offset + gid * 8);
+    const int byte_offset = gid * 8;
+    if (byte_offset >= total_bytes) return;
+
+    if (byte_offset + 8 <= total_bytes) {
+        // Full 8-byte aligned copy
+        const uint64_t* src = (const uint64_t*)(in + byte_offset);
+        uint64_t* dst = (uint64_t*)(out + out_offset + byte_offset);
         *dst = *src;
+    } else {
+        // Handle remainder bytes (last <8 bytes)
+        for (int i = byte_offset; i < total_bytes; i++) {
+            out[out_offset + i] = in[i];
+        }
     }
 }
 
@@ -75,10 +83,19 @@ __global__ void copy_kernel(
     int total_bytes)
 {
     const int gid = blockIdx.x * blockDim.x + threadIdx.x;
-    if (gid * 8 < total_bytes) {
-        const uint64_t* src = (const uint64_t*)(in + in_offset + gid * 8);
-        uint64_t* dst = (uint64_t*)(out + out_offset + gid * 8);
+    const int byte_offset = gid * 8;
+    if (byte_offset >= total_bytes) return;
+
+    if (byte_offset + 8 <= total_bytes) {
+        // Full 8-byte aligned copy
+        const uint64_t* src = (const uint64_t*)(in + in_offset + byte_offset);
+        uint64_t* dst = (uint64_t*)(out + out_offset + byte_offset);
         *dst = *src;
+    } else {
+        // Handle remainder bytes (last <8 bytes)
+        for (int i = byte_offset; i < total_bytes; i++) {
+            out[out_offset + i] = in[in_offset + i];
+        }
     }
 }
 
