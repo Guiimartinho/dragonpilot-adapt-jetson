@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import os
 from openpilot.system.hardware import TICI, JETSON
 if TICI:
@@ -228,7 +230,7 @@ class ModelState:
     self._cuda_bridge.cuda_driving_frame_prepare.argtypes = [
       ctypes.c_int, ctypes.c_void_p,
       ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
-      ctypes.c_void_p
+      ctypes.c_void_p, ctypes.c_void_p  # projection, d_gpu_ptr
     ]
     self._cuda_bridge.cuda_driving_frame_get_device_ptr.restype = ctypes.c_uint64
     self._cuda_bridge.cuda_driving_frame_get_device_ptr.argtypes = [ctypes.c_int]
@@ -257,19 +259,24 @@ class ModelState:
     self.prev_desire[:] = inputs['desire_pulse']
 
     if self._use_cuda_frames:
-      # Jetson CUDA preprocessing: VisionBuf host SHM → cudaMemcpy H2D → CUDA transform+loadyuv
-      # GPU device ptr → Tensor.from_blob() (zero-copy, stays on GPU)
+      # Jetson CUDA preprocessing: VisionBuf → CUDA transform+loadyuv → device ptr
+      # If VisionBuf has d_addr (mapped memory), GPU reads directly via DMA (no H2D copy)
       for name in self.vision_input_names:
         buf = bufs[name]
         proj = transforms[name].flatten()
+        # Pass d_addr for GPU-direct access (skips cudaMemcpy H2D if available)
+        d_gpu_ptr = self._ctypes.c_void_p(buf.d_addr) if hasattr(buf, 'd_addr') and buf.d_addr else None
         dev_ptr = self._cuda_bridge.cuda_driving_frame_prepare(
           self._cuda_frame_ids[name],
           self._ctypes.c_void_p(buf.data.ctypes.data),
           buf.width, buf.height, buf.stride, buf.uv_offset,
-          proj.ctypes.data_as(self._ctypes.POINTER(self._ctypes.c_float))
+          proj.ctypes.data_as(self._ctypes.POINTER(self._ctypes.c_float)),
+          d_gpu_ptr
         )
+        if dev_ptr == 0:
+          cloudlog.error("cuda_driving_frame_prepare failed for %s", name)
+          continue
         # Zero-copy: wrap CUDA device pointer as tinygrad tensor
-        buf_size = self._cuda_bridge.cuda_driving_frame_get_buf_size(self._cuda_frame_ids[name])
         self.vision_inputs[name] = Tensor.from_blob(dev_ptr, self.vision_input_shapes[name], dtype=dtypes.uint8, device='CUDA').realize()
     else:
       imgs_cl = {name: self.frames[name].prepare(bufs[name], transforms[name].flatten()) for name in self.vision_input_names}
