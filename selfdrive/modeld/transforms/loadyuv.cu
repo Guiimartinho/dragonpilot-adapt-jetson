@@ -12,10 +12,12 @@ __global__ void loadys_kernel(
     uint8_t* __restrict__ out,
     int out_offset,
     int transformed_width,
+    int total_y_bytes,
     int uv_size)
 {
     const int gid = blockIdx.x * blockDim.x + threadIdx.x;
     const int ois = gid * 8;
+    if (ois >= total_y_bytes) return;  // bounds check for last partial block
     const int oy = ois / transformed_width;
     const int ox = ois % transformed_width;
 
@@ -104,10 +106,11 @@ extern "C" {
 void cuda_loadys(const uint8_t* Y, uint8_t* out, int out_offset,
                  int transformed_width, int transformed_height, cudaStream_t stream) {
     int uv_size = (transformed_width / 2) * (transformed_height / 2);
-    int total_elements = (transformed_width * transformed_height) / 8;
+    int total_y_bytes = transformed_width * transformed_height;
+    int total_elements = total_y_bytes / 8;
     int threads = 256;
     int blocks = (total_elements + threads - 1) / threads;
-    loadys_kernel<<<blocks, threads, 0, stream>>>(Y, out, out_offset, transformed_width, uv_size);
+    loadys_kernel<<<blocks, threads, 0, stream>>>(Y, out, out_offset, transformed_width, total_y_bytes, uv_size);
 }
 
 void cuda_loaduv(const uint8_t* in, uint8_t* out, int out_offset,
