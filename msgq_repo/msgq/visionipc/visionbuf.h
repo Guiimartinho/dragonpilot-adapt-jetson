@@ -47,6 +47,9 @@ class VisionBuf {
   cl_mem buf_cl = nullptr;
   cl_command_queue copy_q = nullptr;
 
+  // CUDA mapped device pointer (Jetson zero-copy)
+  void *d_addr = nullptr;
+
   // ion
   int handle = 0;
 

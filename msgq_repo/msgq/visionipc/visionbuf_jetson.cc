@@ -49,15 +49,22 @@ void VisionBuf::allocate(size_t length) {
   this->frame_id = (uint64_t*)((uint8_t*)this->addr + this->len);
 
 #ifdef __JETSON__
-  // Pin the shared memory pages so GPU can DMA directly without staging copies.
-  // cudaHostRegister makes existing host memory page-locked (pinned).
-  // This enables zero-copy transfers: clEnqueueMapBuffer returns direct pointer.
+  // Pin the shared memory pages with cudaHostRegisterMapped so the GPU can
+  // access host memory directly via DMA without explicit cudaMemcpy.
+  // cudaHostGetDevicePointer provides the GPU-visible address.
   cudaError_t err = cudaHostRegister(this->addr, this->mmap_len,
-                                     cudaHostRegisterDefault);
+                                     cudaHostRegisterMapped);
   if (err != cudaSuccess) {
     // Non-fatal: falls back to standard buffered transfers
-    fprintf(stderr, "visionbuf_jetson: cudaHostRegister failed (%s), using unpinned memory\n",
+    fprintf(stderr, "visionbuf_jetson: cudaHostRegister(Mapped) failed (%s), using unpinned memory\n",
             cudaGetErrorString(err));
+  } else {
+    // Get device pointer for GPU-direct access (true zero-copy on Jetson unified memory)
+    void* d_ptr = nullptr;
+    err = cudaHostGetDevicePointer(&d_ptr, this->addr, 0);
+    if (err == cudaSuccess && d_ptr != nullptr) {
+      this->d_addr = d_ptr;
+    }
   }
 #endif
 }
@@ -69,8 +76,14 @@ void VisionBuf::import() {
   this->frame_id = (uint64_t*)((uint8_t*)this->addr + this->len);
 
 #ifdef __JETSON__
-  // Also pin imported buffers for zero-copy GPU access
-  cudaHostRegister(this->addr, this->mmap_len, cudaHostRegisterDefault);
+  // Also pin imported buffers for zero-copy GPU access (mapped for GPU-direct)
+  cudaError_t err = cudaHostRegister(this->addr, this->mmap_len, cudaHostRegisterMapped);
+  if (err == cudaSuccess) {
+    void* d_ptr = nullptr;
+    if (cudaHostGetDevicePointer(&d_ptr, this->addr, 0) == cudaSuccess && d_ptr != nullptr) {
+      this->d_addr = d_ptr;
+    }
+  }
   // Ignore errors: not all imported buffers need GPU access
 #endif
 }
@@ -115,9 +128,13 @@ int VisionBuf::free() {
   }
 
 #ifdef __JETSON__
-  // Unpin before unmapping
+  // Unpin before unmapping (invalidates d_addr)
   if (this->addr != nullptr && this->addr != MAP_FAILED) {
-    cudaHostUnregister(this->addr);
+    cudaError_t unreg_err = cudaHostUnregister(this->addr);
+    if (unreg_err != cudaSuccess && unreg_err != cudaErrorHostMemoryNotRegistered) {
+      fprintf(stderr, "visionbuf_jetson: cudaHostUnregister failed: %s\n", cudaGetErrorString(unreg_err));
+    }
+    this->d_addr = nullptr;
   }
 #endif
 
