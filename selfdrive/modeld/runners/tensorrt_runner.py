@@ -7,6 +7,7 @@ tensorrt package that is incompatible with our Python 3.11 venv.
 
 Engine building uses trtexec CLI. Runtime inference uses the TRT C++ API.
 """
+from __future__ import annotations
 
 import os
 import ctypes

@@ -1,4 +1,6 @@
 #!/usr/bin/env python3
+from __future__ import annotations
+
 import os
 from openpilot.system.hardware import TICI, JETSON
 if TICI:
@@ -44,13 +46,13 @@ if USE_DLA:
   try:
     from openpilot.selfdrive.modeld.runners.dla_runner import DLAModelRunner
     _dla_available = True
-  except ImportError:
+  except Exception:
     pass
 if not _dla_available and USE_TENSORRT:
   try:
     from openpilot.selfdrive.modeld.runners.tensorrt_runner import TensorRTModelRunner
     _trt_available = True
-  except ImportError:
+  except Exception:
     pass
 
 

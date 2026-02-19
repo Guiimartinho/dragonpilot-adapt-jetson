@@ -7,6 +7,7 @@ completely freeing the GPU for the driving vision model.
 Xavier has 2 DLA cores. This uses DLA core 0 by default.
 Requires TensorRT as the DLA backend.
 """
+from __future__ import annotations
 
 import logging
 from pathlib import Path

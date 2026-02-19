@@ -86,19 +86,49 @@ else
   echo "pycuda: OK"
 fi
 
-# Step 5: Pre-create engine cache directory
+# Step 5: Compile trt_runtime.so (C bridge for Python ctypes)
 echo ""
-echo "[5/5] Setting up engine cache..."
+echo "[5/7] Compiling trt_runtime.so..."
+TRT_RUNTIME_SRC="$OPENPILOT_DIR/selfdrive/modeld/runners/trt_runtime.cpp"
+TRT_RUNTIME_SO="$OPENPILOT_DIR/selfdrive/modeld/runners/trt_runtime.so"
+if [ -f "$TRT_RUNTIME_SRC" ]; then
+  g++ -shared -fPIC -O2 -I/usr/local/cuda/include \
+    -o "$TRT_RUNTIME_SO" "$TRT_RUNTIME_SRC" \
+    -lnvinfer -lcudart -L/usr/local/cuda/lib64
+  if [ $? -eq 0 ]; then
+    echo "trt_runtime.so compiled: $TRT_RUNTIME_SO"
+  else
+    echo "WARNING: trt_runtime.so compilation failed"
+  fi
+else
+  echo "WARNING: trt_runtime.cpp not found at $TRT_RUNTIME_SRC"
+fi
+
+# Step 6: Pre-create engine cache directory
+echo ""
+echo "[6/7] Setting up engine cache..."
 TRT_CACHE="${TRT_ENGINE_CACHE:-/data/trt_engines}"
 mkdir -p "$TRT_CACHE"
 chmod 777 "$TRT_CACHE"
 echo "Engine cache: $TRT_CACHE"
+
+# Step 7: Verify trt_runtime.so loads correctly
+echo ""
+echo "[7/7] Verifying trt_runtime.so..."
+if [ -f "$TRT_RUNTIME_SO" ]; then
+  TRT_LOAD=$($PYTHON -c "import ctypes; ctypes.CDLL('$TRT_RUNTIME_SO'); print('OK')" 2>/dev/null || echo "FAILED")
+  echo "trt_runtime.so load: $TRT_LOAD"
+else
+  TRT_LOAD="NOT_BUILT"
+  echo "trt_runtime.so: not built"
+fi
 
 # Summary
 echo ""
 echo "=== Installation Complete ==="
 echo "TensorRT: $TRT_VERSION"
 echo "pycuda: $PYCUDA_OK"
+echo "trt_runtime.so: $TRT_LOAD"
 echo "Engine cache: $TRT_CACHE"
 echo ""
 echo "TensorRT runner will activate automatically on next modeld start."
