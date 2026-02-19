@@ -27,7 +27,7 @@ fi
 
 # Step 1: Install TensorRT Python bindings + dev headers
 echo ""
-echo "[1/5] Installing TensorRT packages..."
+echo "[1/7] Installing TensorRT packages..."
 apt-get update -qq
 apt-get install -y --no-install-recommends \
   python3-libnvinfer \
@@ -37,7 +37,7 @@ apt-get install -y --no-install-recommends \
 
 # Step 2: Install pycuda for CUDA memory management
 echo ""
-echo "[2/5] Installing pycuda..."
+echo "[2/7] Installing pycuda..."
 OPENPILOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 if [ -d "$OPENPILOT_DIR/.venv" ]; then
   "$OPENPILOT_DIR/.venv/bin/pip" install pycuda 2>/dev/null || \
@@ -48,7 +48,7 @@ fi
 
 # Step 3: Verify TensorRT installation
 echo ""
-echo "[3/5] Verifying TensorRT..."
+echo "[3/7] Verifying TensorRT..."
 PYTHON="${OPENPILOT_DIR}/.venv/bin/python3"
 [ ! -f "$PYTHON" ] && PYTHON="python3"
 
@@ -77,7 +77,7 @@ echo "TensorRT version: $TRT_VERSION"
 
 # Step 4: Verify pycuda
 echo ""
-echo "[4/5] Verifying pycuda..."
+echo "[4/7] Verifying pycuda..."
 PYCUDA_OK=$($PYTHON -c "import pycuda.driver; pycuda.driver.init(); print('OK')" 2>/dev/null || echo "FAILED")
 if [ "$PYCUDA_OK" = "FAILED" ]; then
   echo "WARNING: pycuda not available. TensorRT runner will use numpy fallback."
