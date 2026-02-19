@@ -41,10 +41,11 @@ __global__ void warpPerspectiveKernel(
         int sy_clamp    = min(max(sy, 0), src_rows - 1);
         int sy_p1_clamp = min(max(sy + 1, 0), src_rows - 1);
 
-        int v0 = src[sy_clamp    * src_row_stride + src_offset + sx_clamp    * src_px_stride];
-        int v1 = src[sy_clamp    * src_row_stride + src_offset + sx_p1_clamp * src_px_stride];
-        int v2 = src[sy_p1_clamp * src_row_stride + src_offset + sx_clamp    * src_px_stride];
-        int v3 = src[sy_p1_clamp * src_row_stride + src_offset + sx_p1_clamp * src_px_stride];
+        // Use __ldg() for read-only data cache path (optimized for scattered reads on Volta sm_72)
+        int v0 = __ldg(&src[sy_clamp    * src_row_stride + src_offset + sx_clamp    * src_px_stride]);
+        int v1 = __ldg(&src[sy_clamp    * src_row_stride + src_offset + sx_p1_clamp * src_px_stride]);
+        int v2 = __ldg(&src[sy_p1_clamp * src_row_stride + src_offset + sx_clamp    * src_px_stride]);
+        int v3 = __ldg(&src[sy_p1_clamp * src_row_stride + src_offset + sx_p1_clamp * src_px_stride]);
 
         int ay = Y & (INTER_TAB_SIZE - 1);
         int ax = X & (INTER_TAB_SIZE - 1);
