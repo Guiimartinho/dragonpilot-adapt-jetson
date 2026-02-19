@@ -1,512 +1,290 @@
-# DragonPilot Jetson AGX Xavier - Plano de Otimizacao Completo
+# DragonPilot Jetson AGX Xavier - Optimization Details
 
-## Objetivo: Rodar CENTENAS de vezes melhor que o Snapdragon 845 (Comma)
+Single source of truth for all Jetson optimizations, benchmarks, bugs fixed, and files.
 
-Hardware Xavier: 8 cores ARM Carmel 2.26GHz, 512 CUDA cores Volta sm_72, 64 tensor cores, 32GB RAM, 2x NVDEC, NVENC, 2x NVDLA, TensorRT, JetPack 5.1.4
-
----
-
-## STATUS DAS OTIMIZACOES IMPLEMENTADAS
-
-| # | Otimizacao | Status | Resultado Real |
-|---|-----------|--------|----------------|
-| 1 | FP16 end-to-end nos Tensor Cores | IMPLEMENTADO | compile3.py mantem FP16 na GPU sem cast para FP32 |
-| 2 | CUDA Graphs (JIT_BATCH_SIZE=32) | IMPLEMENTADO | 122 kernels em 3 grafos, ~8.8ms inference |
-| 3 | Tensor Cores (TC=1) | IMPLEMENTADO | 64 tensor cores Volta habilitados via tinygrad |
-| 4 | VisionBuf pinned memory (cudaHostRegister) | IMPLEMENTADO | DMA mais rapido para transfers GPU, nao e zero-copy |
-| 5 | TensorRT runner + install script | IMPLEMENTADO | Fallback automatico para tinygrad, script de instalacao pronto |
-| 6 | NVDLA runner | IMPLEMENTADO | Fallback 3-tier: DLA0 → DLA1 → GPU TensorRT → tinygrad |
-| 7 | Camera CSI V4L2 | CODIGO PRONTO | Para uso com camera real, inativo durante replay |
-| 8 | DPMS disable | IMPLEMENTADO | Previne freeze da UI a cada 10min em headless |
-| 9 | VNC otimizado | IMPLEMENTADO | -wait 50 -defer 30 -noxdamage, CPU de 37% para ~2% idle |
-| 10 | NVDEC hardware decode | IMPLEMENTADO | h264_nvv4l2dec/hevc_nvv4l2dec com fallback CUDA hwaccel |
-| 11 | NVENC hardware encode | IMPLEMENTADO | h264_nvmpi/h264_nvenc com CBR, zero-latency |
-| 12 | Kernels CUDA nativos | IMPLEMENTADO | transform.cu + loadyuv.cu + headers + nvcc build sm_72 |
-| 13 | Core affinity completo (8 cores) | IMPLEMENTADO | Todos os processos com core dedicado no Jetson |
-| 14 | MPC N=32 → N=24 | IMPLEMENTADO | 25% mais rapido no lateral planning |
-| 15 | Cache slip_factor | IMPLEMENTADO | _slip_factor_cache com invalidacao automatica |
-| 16 | Modo parked (10W, 4 cores) | IMPLEMENTADO | nvpmodel -m 1, desliga cores 4-7 |
-| 17 | Dynamic Frequency Scaling | IMPLEMENTADO | CPU adaptativo, GPU/EMC max ao dirigir, min parked |
-| 18 | Fan controller PID | IMPLEMENTADO | Target 65C dirigindo, 70C parked, hysteresis 5% |
-| 19 | tmpfs buffer para logs | IMPLEMENTADO | /dev/shm staging com flush 5s para NVMe |
-| 20 | Huge Pages para CUDA | IMPLEMENTADO | 256 pages (512MB) + THP madvise |
-| 21 | CUDA zero-copy preprocessing | IMPLEMENTADO | 46ms→16ms (2.9x), 0% frame drops, Tensor.from_blob |
-| 22 | Benchmark script modeld | IMPLEMENTADO | tools/jetson/benchmark_modeld.py (latencia, FPS, GPU/CPU/temp) |
-
-### Bugs corrigidos
-- `USE_TC=1` → `TC=1`: tinygrad le `ContextVar("TC", 1)`, nao `USE_TC`. Tensor cores nao estavam sendo ativados.
-- `CUDA_OPT=1` removido: nao e variavel real do tinygrad, zero efeito.
-- Zero-copy falso em commonmodel.h removido: `clEnqueueMapBuffer` com POCL sempre retorna ponteiro diferente, memcpy sempre executava. Simplificado para `clEnqueueReadBuffer` honesto.
-- DPMS X11: Standby de 600s desligava o display virtual, causando UI a 1fps.
-- CUDA stream invalidation: `cudaStreamCreate()` antes do tinygrad init criava streams que eram invalidados quando tinygrad compilava CUDA graphs. Fix: usar default stream (0) que nunca e invalidado.
-- Ring buffer temporal: implementacao errada causava output zerado. Fix: 5 slots com shift correto a cada frame.
-- Upload size YUV420: VisionBuf com padding entre Y e UV (`uv_offset > stride*height`). Fix: `uv_offset + stride*height/2`.
-- `if (ext_stream)` false para stream=0: em C++, `cudaStream_t(0)` testa como nullptr. Fix: usar `bool use_ext` flag na API.
+Hardware: 8 cores ARM Carmel 2.26GHz, 512 CUDA cores Volta sm_72, 64 tensor cores, 32GB RAM, 2x NVDEC, NVENC, 2x NVDLA, TensorRT, JetPack 5.1.4
 
 ---
 
-## RESUMO EXECUTIVO - TOP 20 OTIMIZACOES POR IMPACTO
+## OPTIMIZATION STATUS
 
-| # | Otimizacao | Area | Impacto | Status |
-|---|-----------|------|---------|--------|
-| 1 | CUDA Graphs (JIT_BATCH_SIZE=32) | Inferencia | **~8.8ms inference** | FEITO |
-| 2 | FP16 end-to-end nos Tensor Cores | Inferencia | **sem cast FP32** | FEITO |
-| 3 | Tensor Cores Volta (TC=1) | Inferencia | **64 cores ativos** | FEITO |
-| 4 | VisionBuf pinned memory | Memoria | **DMA transfer** | FEITO |
-| 5 | TensorRT para modelos de visao | Inferencia | **2-5x vs tinygrad** | FEITO (script instalacao pronto) |
-| 6 | NVDLA para dmonitoring | Inferencia | **libera GPU** | FEITO (ativa com TensorRT) |
-| 7 | NVDEC hardware decode no replay | Video | **190% CPU → 5%** | FEITO |
-| 8 | NVENC hardware encode no loggerd | Video | **80% CPU → 5%** | FEITO |
-| 9 | Kernels CUDA nativos (substituir OpenCL) | Inferencia | **12ms saved** | FEITO |
-| 10 | CUDA zero-copy preprocessing | Inferencia | **46ms→16ms (2.9x)** | FEITO |
-| 11 | Fullscreen + VSync na UI | UI | **15% CPU saved** | PENDENTE |
-| 11 | Eliminar render texture scaling | UI | **20% GPU saved** | PENDENTE |
-| 12 | Modo parked (10W, 4 cores) | Power | **5-6W saved** | FEITO |
-| 13 | Dynamic Frequency Scaling | Power | **8W saved** | FEITO |
-| 14 | Lateral MPC N=32→24 | Controles | **25% MPC faster** | FEITO |
-| 15 | Cache slip_factor no VehicleModel | Controles | **15% faster** | FEITO |
-| 16 | tmpfs buffer para logs | I/O | **50% latencia** | FEITO |
-| 17 | Core affinity otimizado (8 cores) | Sistema | **jitter -70%** | FEITO |
-| 18 | Camera MIPI CSI-2 nativa (V4L2) | Camera | **zero CPU** | PRONTO |
-| 19 | Huge Pages para CUDA | Memoria | **5-10% TLB** | FEITO |
-| 20 | Precompiled Python + boot | Boot | **500ms faster** | PENDENTE |
-
----
-
-## FASE 1: INFERENCIA DE MODELOS
-
-### 1.1 VisionBuf Pinned Memory (IMPLEMENTADO)
-
-**Arquivo**: `msgq_repo/msgq/visionipc/visionbuf_jetson.cc`
-
-Usa `cudaHostRegister` para pinar paginas de shared memory, permitindo DMA mais rapido entre CPU e GPU. Nao e zero-copy verdadeiro com POCL/OpenCL, mas reduz latencia de transfer.
-
-**Nota**: `clEnqueueMapBuffer` com POCL sempre retorna ponteiro diferente do buffer original, entao true zero-copy nao e possivel nesta stack. O path honesto e `clEnqueueReadBuffer` com memoria pinada.
-
-### 1.2 CUDA Graphs via TinyJit (IMPLEMENTADO)
-
-**Arquivo**: `selfdrive/modeld/modeld.py`, `selfdrive/modeld/SConscript`
-
-`JIT_BATCH_SIZE=32` consolida kernels em CUDA graphs:
-- Run 0: baseline
-- Run 1: schedule + JIT capture (126 kernels → 122 pruned)
-- Run 2: CUDA graph capture (3 batches: 32+64+26 kernels)
-- Runs 3+: graph replay (~8.8ms total, ~0.9ms enqueue)
-
-### 1.3 FP16 End-to-End (IMPLEMENTADO)
-
-**Arquivo**: `tinygrad_repo/examples/openpilot/compile3.py`
-
-Quando `FLOAT16=1` e `DEV=CUDA`, remove o `.cast('float32')` final, mantendo output FP16 na GPU. Evita conversao desnecessaria que desperdicava tensor cores.
-
-### 1.4 Tensor Cores (IMPLEMENTADO)
-
-**Arquivo**: `selfdrive/modeld/modeld.py`, `dmonitoringmodeld.py`, `SConscript`
-
-Variavel correta: `TC=1` (tinygrad `ContextVar("TC", 1)` em `helpers.py:171`).
-Os 64 tensor cores Volta sm_72 sao usados para operacoes FP16 GEMM.
-
-### 1.5 TensorRT Backend (IMPLEMENTADO - script de instalacao pronto)
-
-**Arquivos**:
-- `selfdrive/modeld/runners/tensorrt_runner.py` (310 linhas) - Runner completo
-- `scripts/jetson_install_tensorrt.sh` - Script de instalacao automatica
-
-Runner completo com:
-- Compilacao ONNX → TensorRT engine com FP16
-- Cache de engines em `/data/trt_engines/`
-- Suporte a DLA cores
-- Verificacao de pycuda e TensorRT
-
-**Para ativar**:
-```bash
-sudo ./scripts/jetson_install_tensorrt.sh
-```
-O fallback para tinygrad e automatico via try/except.
-
-### 1.6 NVDLA para Driver Monitoring (IMPLEMENTADO - ativa com TensorRT)
-
-**Arquivo**: `selfdrive/modeld/runners/dla_runner.py` (127 linhas)
-
-Fallback 3-tier: DLA core 0 → DLA core 1 → GPU TensorRT → tinygrad.
-
-### 1.7 Kernels CUDA Nativos (IMPLEMENTADO)
-
-**Arquivos**:
-- `selfdrive/modeld/transforms/transform.cu` - Warp perspective CUDA kernel (sm_72)
-- `selfdrive/modeld/transforms/loadyuv.cu` - YUV loading CUDA kernels
-- `selfdrive/modeld/transforms/transform_cuda.h` - Header + CudaTransform struct
-- `selfdrive/modeld/transforms/loadyuv_cuda.h` - Header + CudaLoadYUVState struct
-- `selfdrive/modeld/models/commonmodel_cuda.h` - Pipeline CUDA nativo completo
-
-SConscript compila .cu com nvcc -arch=sm_72 -O3 --use_fast_math no jarch64.
-
-Pipeline CUDA nativo elimina overhead POCL/OpenCL:
-```
-OpenCL: VisionIPC → cl_mem → POCL→CUDA warp → POCL→CUDA loadyuv → clReadBuffer → host → tinygrad (~46ms)
-CUDA:   VisionIPC → cudaMemcpy → CUDA warp → CUDA loadyuv → device ptr → Tensor.from_blob (zero-copy, ~16ms)
-```
-
-### 1.9 CUDA Zero-Copy Preprocessing (IMPLEMENTADO)
-
-**Arquivos**:
-- `selfdrive/modeld/models/commonmodel_cuda.h` - Pipeline completo com lazy GPU init + default stream
-- `selfdrive/modeld/models/cuda_frame_bridge.cpp` - Bridge C para ctypes Python
-- `selfdrive/modeld/modeld.py` - Tensor.from_blob() zero-copy path
-
-Elimina completamente o roundtrip OpenCL→CPU→CUDA:
-- CUDA default stream (0) para evitar invalidacao por tinygrad context
-- Lazy GPU allocation (apos tinygrad inicializar)
-- Ring buffer temporal (5 slots) para contexto multi-frame
-- `Tensor.from_blob()` do tinygrad para zero-copy GPU→GPU (sem D2H/H2D)
-- Upload padded YUV420 correto (`uv_offset + stride*height/2`)
-
-**Resultado medido (benchmark 3min, 2639 frames)**:
-- Median: 15.85ms, P95: 16.64ms, P99: 17.49ms
-- Frame drops: 0%
-- 2.9x mais rapido que OpenCL (46ms → 16ms)
-
-### 1.8 Huge Pages para CUDA (IMPLEMENTADO)
-
-**Arquivo**: `system/hardware/jetson/hugepages.py`
-
-- 256 huge pages de 2MB = 512MB pre-alocadas para CUDA
-- Transparent Huge Pages (THP) em modo madvise
-- `CUDA_USE_HUGEPAGES=1` configurado automaticamente
-- Inicializado em `hardware.py` → `initialize_hardware()`
-
-**Benchmarks Fase 1 (medidos)**:
-- Vision model: min=8.68ms avg=8.85ms max=9.52ms (122 kernels, 3 CUDA graphs)
-- Model pkl: 50.32MB (vision), 14MB (policy), 9.6MB (dmonitoring)
+| # | Optimization | Status | Result |
+|---|-------------|--------|--------|
+| 1 | FP16 end-to-end (Tensor Cores) | Done | compile3.py keeps FP16 on GPU |
+| 2 | CUDA Graphs (JIT_BATCH_SIZE=32) | Done | 122 kernels in 3 graphs, ~8.8ms inference |
+| 3 | Tensor Cores (TC=1) | Done | 64 Volta tensor cores active |
+| 4 | VisionBuf mapped memory (cudaHostRegisterMapped) | Done | GPU-direct access via cudaHostGetDevicePointer |
+| 5 | TensorRT runner + install script | Done | Auto-fallback to tinygrad |
+| 6 | NVDLA runner | Done | 3-tier fallback: DLA0→DLA1→GPU TRT→tinygrad |
+| 7 | Camera CSI V4L2 | Ready | For real camera, inactive during replay |
+| 8 | DPMS disable | Done | Prevents UI freeze every 10min |
+| 9 | VNC optimized | Done | CPU from 37% to ~2% idle |
+| 10 | NVDEC hardware decode | Done | h264_nvv4l2dec/hevc_nvv4l2dec |
+| 11 | NVENC hardware encode | Done | h264_nvmpi/h264_nvenc, CBR, zero-latency |
+| 12 | Native CUDA kernels | Done | transform.cu + loadyuv.cu via nvcc sm_72 |
+| 13 | Core affinity (8 cores) | Done | Optimized distribution, reduced core 7 overload |
+| 14 | MPC N=32→N=24 | Done | 25% faster lateral planning |
+| 15 | Cache slip_factor | Done | _slip_factor_cache with auto-invalidation |
+| 16 | Parked mode (10W) | Done | nvpmodel -m 1, disables cores 4-7 |
+| 17 | Dynamic Frequency Scaling | Done | CPU/GPU/EMC adaptive |
+| 18 | Fan controller PID | Done | Target 65C driving, 70C parked, 5% hysteresis |
+| 19 | tmpfs log buffer | Done | /dev/shm staging, flush NVMe 5s |
+| 20 | Huge Pages CUDA | Done | 256 x 2MB (512MB) for TLB |
+| 21 | CUDA zero-copy preprocessing | Done | 46ms→16ms (2.9x), 0% frame drops |
+| 22 | Benchmark script | Done | tools/jetson/benchmark_modeld.py |
+| 23 | Ring buffer optimization | Done | Single cudaMemcpy replaces sequential loop |
+| 24 | loadyuv kernel truncation fix | Done | Handles last <8 bytes correctly |
+| 25 | CUDA pipeline safety | Done | Bounds checks, slot reuse, error validation |
+| 26 | TensorRT/DLA Python 3.8+ fix | Done | `from __future__ import annotations` |
 
 ---
 
-## FASE 2: VIDEO DECODE/ENCODE HARDWARE
+## BENCHMARKS (Single Source of Truth)
 
-### 2.1 NVDEC Hardware Decoder no Replay (IMPLEMENTADO)
+### modeld End-to-End (CUDA Zero-Copy, 3min, 2639 frames)
 
-**Arquivos**:
-- `tools/replay/nvdec_decoder.cc` (247 linhas)
-- `tools/replay/nvdec_decoder.h` (33 linhas)
-
-Dual decoder fallback: `h264_nvv4l2dec` / `hevc_nvv4l2dec` (Jetson V4L2) → CUDA hwaccel → software.
-Suporta NV12, NV21, YUV420P com conversao automatica.
-
-**Dispositivos**: `/dev/video32` (H.264), `/dev/video33` (HEVC)
-
-### 2.2 NVENC Hardware Encoder no Loggerd (IMPLEMENTADO)
-
-**Arquivos**:
-- `system/loggerd/encoder/nvenc_encoder.cc` (253 linhas)
-- `system/loggerd/encoder/nvenc_encoder.h` (42 linhas)
-
-Dual codec fallback: `h264_nvmpi` (Jetson L4T) → `h264_nvenc` (generic NVIDIA) → software.
-Aceita NV12 direto, CBR mode, zero-latency, buffers pre-alocados.
-
-`encoderd.cc` seleciona automaticamente via `#ifdef __JETSON__`.
-
-### 2.3 NV12 Format Nativo (PENDENTE)
-
-### 2.4 VisionBuf com DMA-BUF (PENDENTE)
-
-Requires Jetson-specific V4L2 DMA-BUF integration para true zero-copy pipeline.
-
----
-
-## FASE 3: UI E RENDERING
-
-### 3.1 DPMS Disable (IMPLEMENTADO)
-
-**Arquivo**: `scripts/jetson_replay.sh`, `scripts/jetson_stress_test.sh`
-
-```bash
-DISPLAY=:0 xset s off
-DISPLAY=:0 xset -dpms
-DISPLAY=:0 xset s noblank
-```
-
-Sem isso, DPMS Standby (600s) desliga o display virtual e raylib fica bloqueado no swap_buffers (1fps).
-
-### 3.2 VNC Otimizado (IMPLEMENTADO)
-
-```bash
-x11vnc -display :0 -clip 1920x960+0+60 -scale 0.4 \
-       -rfbport 5900 -forever -shared -nopw \
-       -wait 50 -defer 30 -noxdamage -nocursor -norepeat
-```
-
-CPU reduzido de 37% para ~2% (idle) / ~29% (streaming ativo).
-
-### 3.3 Fullscreen + VSync (PENDENTE)
-### 3.4 Eliminar Render Texture Overhead (PENDENTE)
-### 3.5 Cache Polygon Vertices (PENDENTE)
-
----
-
-## FASE 4: CONTROLES E PLANEJAMENTO
-
-### 4.1 Core Affinity Completo (IMPLEMENTADO)
-
-**Mapa de 8 cores Jetson AGX Xavier:**
-
-| Core | Processo | Prioridade | Funcao |
-|------|---------|------------|--------|
-| 0 | UI (raylib) | 51 | Render 60fps |
-| 1 | controlsd, sensord | 53 (SCHED_FIFO) | Controle veicular |
-| 2 | card | 53 (SCHED_FIFO) | Interface carro |
-| 3-4 | modeld | 54 (SCHED_FIFO) | CUDA inference vision |
-| 5 | plannerd, radard | 51 (SCHED_FIFO) | Planejamento + radar |
-| 5-6 | selfdrived | 53 (SCHED_FIFO) | Estado do sistema |
-| 6 | dmonitoringmodeld | 5 | CUDA/DLA driver monitoring |
-| 7 | locationd, calibrationd, torqued, paramsd, lagd, dmonitoringd | 5 | Localizacao e calibracao |
-
-**Arquivos modificados**: controlsd.py, card.py, modeld.py, selfdrived.py, dmonitoringmodeld.py, dmonitoringd.py, torqued.py, paramsd.py, locationd.py, calibrationd.py, lagd.py
-
-### 4.2 MPC Lateral N=24 (IMPLEMENTADO)
-
-**Arquivo**: `selfdrive/controls/lib/lateral_mpc_lib/lat_mpc.py:28`
-
-```python
-# Reduced horizon for Jetson: N=24 saves ~25% MPC solve time with minimal quality loss.
-N = 24
-```
-
-### 4.3 Cache slip_factor (IMPLEMENTADO)
-
-**Arquivo**: `opendbc_repo/opendbc/car/vehicle_model.py`
-
-```python
-self._slip_factor_cache: float | None = None  # Cache: recalculated only when params change
-```
-
-Invalidado automaticamente em `update_params()`. Usado em `curvature_factor()` e `roll_compensation()`.
-
----
-
-## FASE 5: SISTEMA, POWER E I/O
-
-### 5.1 Modo Parked (IMPLEMENTADO)
-
-**Arquivo**: `system/hardware/jetson/hardware.py` → `set_power_save()`
-
-- Parked: `nvpmodel -m 1` (10W), desliga cores 4-7
-- Driving: `nvpmodel -m 0` (MAXN 30W), todos os 8 cores, `jetson_clocks`
-
-### 5.2 Dynamic Frequency Scaling (IMPLEMENTADO)
-
-**Arquivo**: `system/hardware/jetson/dfs.py`
-
-- CPU: 1.2 / 1.7 / 2.27 GHz (adaptativo por carga)
-- GPU: 520 / 900 / 1377 MHz (max ao dirigir)
-- EMC: 665 / 1600 / 2133 MHz (max ao dirigir, essencial para CUDA bandwidth)
-- Thread-safe, update a cada 2s, modo parked minimiza tudo
-
-### 5.3 Fan Controller PID (IMPLEMENTADO)
-
-**Arquivo**: `system/hardware/jetson/fan_controller.py`
-
-- PID: k_p=0.5, k_i=2e-3, k_d=1e-2
-- Target: 65°C dirigindo, 70°C parked
-- Hysteresis: 5% (previne oscilacao)
-- PWM: /sys/devices/pwm-fan/target_pwm (0-255)
-- Safe defaults para NaN/Inf do sensor
-
-### 5.4 tmpfs Buffer para Logs (IMPLEMENTADO)
-
-**Arquivo**: `system/hardware/jetson/tmpfs_logger.py`
-
-- Logs escritos em `/dev/shm/openpilot_logs/` (RAM-backed)
-- Flush background a cada 5s para `/data/media/0/realdata/` (NVMe)
-- Max 512MB em tmpfs antes de forced flush
-- Segmentos completos movidos, segmento atual fica em tmpfs
-- Ativado automaticamente em `system/hardware/hw.py` para Jetson
-- Desativavel com `JETSON_TMPFS_LOGS=0`
-
-### 5.5 Watchdog de Clocks (IMPLEMENTADO)
-
-**Arquivo**: `system/hardware/jetson/hardware.py` → `_jetson_clocks_watchdog()`
-
-Thread que verifica a cada 2 minutos se thermal throttling reduziu frequencia.
-Se CPU < 2GHz, re-aplica `jetson_clocks`.
-
----
-
-## FASE 6: CAMERA NATIVA
-
-### 6.1 Camera CSI V4L2 (CODIGO PRONTO)
-
-**Arquivos**:
-- `system/camerad/cameras/camera_jetson.py` (454 linhas) - Driver V4L2 MIPI CSI-2
-- `system/camerad/jetson_camerad.py` (147 linhas) - Camera daemon
-
-Suporta deteccao automatica de cameras CSI e fallback para webcam USB.
-Inativo durante replay (replay fornece frames via VisionIPC).
-
----
-
-## BENCHMARKS MEDIDOS
-
-### modeld CUDA Zero-Copy (Benchmark 3min, 2639 frames)
-
-| Metrica | Valor |
-|---------|-------|
+| Metric | Value |
+|--------|-------|
 | **modeld execution (median)** | **15.85ms** |
-| **modeld execution (mean)** | 15.95ms |
-| **modeld execution (P95)** | 16.64ms |
-| **modeld execution (P99)** | 17.49ms |
-| **modeld execution (max)** | 21.18ms |
-| **modeld stddev** | 0.44ms |
+| modeld execution (mean) | 15.95ms |
+| modeld execution (P95) | 16.64ms |
+| modeld execution (P99) | 17.49ms |
+| modeld execution (max) | 21.18ms |
+| modeld stddev | 0.44ms |
 | **Frame drops** | **0 (0.00%)** |
-| **FPS (avg)** | 14.7 |
-| **FPS (median)** | 14.8 |
-| **dmonitoringmodeld (median)** | 20.83ms |
-| **GPU usage (median)** | 8.1% |
-| **CPU usage (median)** | 16.4% |
-| **RAM usage (avg)** | 5,552 MB / 30,991 MB |
-| **GPU Temp (max)** | 51.0°C |
-| **CPU Temp (max)** | 53.0°C |
+| FPS (avg) | 14.7 |
+| FPS (median) | 14.8 |
+| dmonitoringmodeld (median) | 20.83ms |
 
-### Comparacao OpenCL vs CUDA Zero-Copy
+### OpenCL vs CUDA Zero-Copy
 
-| Metrica | OpenCL (POCL) | CUDA Zero-Copy | Melhoria |
-|---------|--------------|----------------|----------|
-| modeld execution | ~46ms | **15.85ms** | **2.9x mais rapido** |
-| Frame drops | frequentes | **0%** | eliminados |
-| Pipeline | CL→CPU→CUDA roundtrip | GPU direto (zero-copy) | sem D2H/H2D |
-| Preprocessing | clReadBuffer (D2H) | Tensor.from_blob (GPU) | zero-copy |
+| Metric | OpenCL (POCL) | CUDA Zero-Copy | Improvement |
+|--------|--------------|----------------|-------------|
+| modeld execution | ~46ms | **15.85ms** | **2.9x faster** |
+| Frame drops | frequent | **0%** | eliminated |
+| Pipeline | CL→CPU→CUDA roundtrip | GPU direct (zero-copy) | no D2H/H2D |
 
-### Sistema (Stress Test 12h)
+### System Resources
 
-| Metrica | Valor |
-|---------|-------|
-| **Vision inference only** | 8.68-9.52ms (avg 8.85ms) |
-| **Kernels** | 122 (3 CUDA graphs: 32+64+26) |
-| **UI FPS** | 50-60+ fps |
-| **GPU Load** | 6-10% (idle) / 65-90% (renderizando) |
-| **CPU Temp** | 50-54°C |
-| **GPU Temp** | 48-52°C |
-| **RAM** | ~5.5 GB / 32 GB |
-| **Replay CPU** | ~16% |
-| **UI CPU** | ~50% |
-| **x11vnc CPU** | ~2% (idle) / ~29% (streaming) |
-| **Stress test** | 12h0m, 0 restarts, 0 erros |
+| Metric | Value |
+|--------|-------|
+| Vision inference only | 8.68-9.52ms (avg 8.85ms) |
+| CUDA kernels | 122 (3 graphs: 32+64+26) |
+| GPU usage (median) | 8.1% |
+| CPU usage (median) | 16.4% |
+| RAM usage | ~5.5 GB / 32 GB |
+| GPU temp (max) | 51.0C |
+| CPU temp (max) | 53.0C |
+| UI FPS | 50-60+ fps |
+| x11vnc CPU | ~2% idle / ~29% streaming |
+| Stress test 12h | 0 restarts, 0 errors |
+
+### Individual Model Inference (tinygrad CUDA Graphs)
+
+| Model | Size | Time |
+|-------|------|------|
+| driving_vision | 50.3M | ~8.7ms |
+| driving_policy | 7.0M | ~3.3ms |
+| dmonitoring_model | 9.6M | ~6.5ms |
+
+Compiled with `DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=32 TC=1`.
 
 ---
 
-## ARQUIVOS CRIADOS
+## BUGS FIXED
 
-| Arquivo | Status | Descricao |
-|---------|--------|-----------|
-| `msgq_repo/msgq/visionipc/visionbuf_jetson.cc` | ATIVO | VisionBuf com cudaHostRegister pinned memory |
-| `selfdrive/modeld/runners/tensorrt_runner.py` | PRONTO | TensorRT runner (ativa com script de instalacao) |
-| `selfdrive/modeld/runners/dla_runner.py` | PRONTO | NVDLA runner (ativa com TensorRT) |
-| `selfdrive/modeld/transforms/transform.cu` | ATIVO | Kernel CUDA warp perspective (sm_72) |
-| `selfdrive/modeld/transforms/loadyuv.cu` | ATIVO | Kernels CUDA YUV loading |
-| `selfdrive/modeld/transforms/transform_cuda.h` | ATIVO | Header + CudaTransform struct |
-| `selfdrive/modeld/transforms/loadyuv_cuda.h` | ATIVO | Header + CudaLoadYUVState struct |
-| `selfdrive/modeld/models/commonmodel_cuda.h` | ATIVO | Pipeline preprocessing CUDA nativo (zero-copy, lazy init, default stream) |
-| `selfdrive/modeld/models/cuda_frame_bridge.cpp` | ATIVO | Bridge C para ctypes Python (zero-copy Tensor.from_blob) |
-| `tools/jetson/benchmark_modeld.py` | ATIVO | Benchmark modeld + dmonitoringmodeld (latencia, FPS, GPU/CPU/temp) |
-| `tools/replay/nvdec_decoder.cc` | ATIVO | NVDEC hardware decoder H.264/HEVC |
-| `tools/replay/nvdec_decoder.h` | ATIVO | Header NVDEC decoder |
-| `system/loggerd/encoder/nvenc_encoder.cc` | ATIVO | NVENC hardware encoder H.264 |
-| `system/loggerd/encoder/nvenc_encoder.h` | ATIVO | Header NVENC encoder |
-| `system/hardware/jetson/hardware.py` | ATIVO | Jetson hardware class + DFS + watchdog |
-| `system/hardware/jetson/dfs.py` | ATIVO | Dynamic Frequency Scaling |
-| `system/hardware/jetson/fan_controller.py` | ATIVO | Fan controller PID |
-| `system/hardware/jetson/hugepages.py` | ATIVO | Huge pages 512MB + THP |
-| `system/hardware/jetson/tmpfs_logger.py` | ATIVO | tmpfs log staging com flush |
-| `system/camerad/cameras/camera_jetson.py` | PRONTO | Camera CSI V4L2 (para camera real) |
-| `system/camerad/jetson_camerad.py` | PRONTO | Camera daemon Jetson |
-| `scripts/jetson_replay.sh` | ATIVO | Script de replay com VNC e DPMS fix |
-| `scripts/jetson_stress_test.sh` | ATIVO | Stress test 12h com watchdog |
-| `scripts/jetson_install_tensorrt.sh` | ATIVO | Instalacao TensorRT + pycuda |
+- `USE_TC=1` → `TC=1`: tinygrad reads `ContextVar("TC", 1)`, not `USE_TC`. Tensor cores were not activating.
+- `CUDA_OPT=1` removed: not a real tinygrad variable, zero effect.
+- False zero-copy in commonmodel.h: `clEnqueueMapBuffer` with POCL always returns different pointer. Simplified to honest `clEnqueueReadBuffer`.
+- DPMS X11: 600s standby disabled virtual display, causing UI at 1fps.
+- CUDA stream invalidation: `cudaStreamCreate()` before tinygrad init created streams invalidated by CUDA graph compilation. Fix: use default stream (0).
+- Ring buffer temporal: wrong implementation caused zeroed output. Fix: 5 slots with correct per-frame shift.
+- YUV420 upload size: VisionBuf with padding between Y and UV (`uv_offset > stride*height`). Fix: `uv_offset + stride*height/2`.
+- `if (ext_stream)` false for stream=0: in C++, `cudaStream_t(0)` tests as nullptr. Fix: `bool use_ext` flag.
+- `gpu_initialized_` race: flag was set before cudaMalloc validation. Fix: set only after all allocations succeed.
+- `g_next_id` overflow: never reset after MAX_FRAMES=8 creates. Fix: slot reuse (find first nullptr).
+- Missing bounds checks in cuda_frame_bridge: all g_frames[] access now validated.
+- loadyuv/copy kernel truncation: last <8 bytes were dropped. Fix: byte-by-byte fallback for remainder.
+- `cudaHostUnregister` without error check. Fix: check return and handle `cudaErrorHostMemoryNotRegistered`.
+- TensorRT runner Python syntax: `dict[str, type]` requires Python 3.10+. Fix: `from __future__ import annotations`.
+- dmonitoringmodeld exception catch: `except ImportError` didn't catch `TypeError`/`RuntimeError` from trt_runtime.so. Fix: `except Exception`.
 
-## ARQUIVOS MODIFICADOS
+---
 
-| Arquivo | Mudanca |
-|---------|---------|
+## IMPLEMENTATION DETAILS
+
+### Phase 1: Model Inference
+
+**1.1 VisionBuf Mapped Memory** — `msgq_repo/msgq/visionipc/visionbuf_jetson.cc`
+
+Uses `cudaHostRegister(Mapped)` + `cudaHostGetDevicePointer()` for GPU-direct access to shared memory pages. GPU can read VisionBuf data directly without explicit cudaMemcpy.
+
+**1.2 CUDA Graphs** — `selfdrive/modeld/modeld.py`, `SConscript`
+
+`JIT_BATCH_SIZE=32` consolidates kernels into CUDA graphs: Run 0 baseline, Run 1 JIT capture, Run 2 graph capture, Runs 3+ graph replay (~8.8ms).
+
+**1.3 FP16 End-to-End** — `tinygrad_repo/examples/openpilot/compile3.py`
+
+Removes `.cast('float32')` final when `FLOAT16=1` + `DEV=CUDA`, keeping output FP16 on GPU.
+
+**1.4 Tensor Cores** — `TC=1` activates 64 Volta sm_72 tensor cores for FP16 GEMM.
+
+**1.5 TensorRT Backend** — `selfdrive/modeld/runners/tensorrt_runner.py` (317 lines)
+
+Complete runner with ctypes bridge to `trt_runtime.so` (C++ TRT API). ONNX→engine build via trtexec, FP16, engine caching in `/data/trt_engines/`, LayerNorm decomposition for TRT 8.5.
+
+**1.6 NVDLA** — `selfdrive/modeld/runners/dla_runner.py` (128 lines)
+
+Fallback: DLA core 0 → DLA core 1 → GPU TensorRT.
+
+**1.7 Native CUDA Kernels** — `transform.cu`, `loadyuv.cu`, headers
+
+Replaces OpenCL kernels, compiled with nvcc -arch=sm_72. Eliminates POCL interop overhead (~12ms saved).
+
+**1.8 CUDA Zero-Copy Preprocessing** — `commonmodel_cuda.h`, `cuda_frame_bridge.cpp`, `modeld.py`
+
+Pipeline: VisionBuf host SHM → cudaMemcpy H2D → CUDA transform+loadyuv → device ptr → Tensor.from_blob() (zero-copy). Default CUDA stream (0) avoids tinygrad context invalidation. Lazy GPU alloc after tinygrad init. Ring buffer: single cudaMemcpy shift (was sequential loop).
+
+**1.9 Huge Pages** — `system/hardware/jetson/hugepages.py`
+
+256 x 2MB = 512MB pre-allocated for CUDA. THP in madvise mode. 5-10% TLB improvement.
+
+### Phase 2: Video Hardware Acceleration
+
+**2.1 NVDEC** — `tools/replay/nvdec_decoder.cc` (247 lines)
+
+Dual decoder: h264_nvv4l2dec → CUDA hwaccel → software fallback.
+
+**2.2 NVENC** — `system/loggerd/encoder/nvenc_encoder.cc` (253 lines)
+
+Dual codec: h264_nvmpi → h264_nvenc → software fallback. CBR, zero-latency.
+
+### Phase 3: UI
+
+**3.1 DPMS Disable** — `scripts/jetson_replay.sh`
+
+Prevents X11 standby from freezing UI at 1fps.
+
+**3.2 VNC Optimized** — `-wait 50 -defer 30 -noxdamage`, CPU from 37% to ~2% idle.
+
+### Phase 4: Controls
+
+**4.1 Core Affinity** (optimized distribution)
+
+| Core | Process | Priority | Role |
+|------|---------|----------|------|
+| 0 | locationd, calibrationd | 5 | Estimation (moved from core 7) |
+| 1 | controlsd | 53 (SCHED_FIFO) | Vehicle control |
+| 2 | card | 53 (SCHED_FIFO) | Car interface |
+| 3-4 | modeld | 54 (SCHED_FIFO) | CUDA inference |
+| 5 | selfdrived | 53 (SCHED_FIFO) | System state |
+| 6 | dmonitoringmodeld | 5 | CUDA/DLA driver monitoring |
+| 7 | plannerd, radard, paramsd, lagd, torqued, dmonitoringd | 5-51 | Planning + low-priority |
+
+Core 7 reduced from 8 to 6 processes. Core 6 no longer conflicts with selfdrived.
+
+**4.2 MPC N=24** — `lat_mpc.py:28`, ~25% faster with minimal quality loss.
+
+**4.3 Cache slip_factor** — `vehicle_model.py`, auto-invalidated in `update_params()`.
+
+### Phase 5: System
+
+**5.1 Parked Mode** — `hardware.py` → `set_power_save()`. Parked: 10W, 4 cores. Driving: MAXN 30W, 8 cores.
+
+**5.2 DFS** — `dfs.py`. CPU 1.2-2.27 GHz, GPU 520-1377 MHz, EMC 665-2133 MHz.
+
+**5.3 Fan PID** — `fan_controller.py`. Target 65C driving, 70C parked, 5% hysteresis.
+
+**5.4 tmpfs Logs** — `tmpfs_logger.py`. /dev/shm staging, flush 5s to NVMe, max 512MB.
+
+---
+
+## FILES CREATED
+
+| File | Status | Description |
+|------|--------|-------------|
+| `msgq_repo/msgq/visionipc/visionbuf_jetson.cc` | Active | VisionBuf with cudaHostRegisterMapped |
+| `selfdrive/modeld/runners/tensorrt_runner.py` | Ready | TensorRT runner (activates with install script) |
+| `selfdrive/modeld/runners/dla_runner.py` | Ready | NVDLA runner (activates with TensorRT) |
+| `selfdrive/modeld/runners/trt_runtime.cpp` | Ready | C++ TRT bridge (compiled by install script) |
+| `selfdrive/modeld/transforms/transform.cu` | Active | CUDA warp perspective kernel (sm_72) |
+| `selfdrive/modeld/transforms/loadyuv.cu` | Active | CUDA YUV loading kernels |
+| `selfdrive/modeld/transforms/transform_cuda.h` | Active | CudaTransform struct |
+| `selfdrive/modeld/transforms/loadyuv_cuda.h` | Active | CudaLoadYUVState struct |
+| `selfdrive/modeld/models/commonmodel_cuda.h` | Active | CUDA preprocessing pipeline (zero-copy, lazy init) |
+| `selfdrive/modeld/models/cuda_frame_bridge.cpp` | Active | C bridge for ctypes (Tensor.from_blob) |
+| `tools/jetson/benchmark_modeld.py` | Active | Benchmark: latency, FPS, GPU/CPU/temp |
+| `tools/replay/nvdec_decoder.cc` | Active | NVDEC H.264/HEVC decoder |
+| `tools/replay/nvdec_decoder.h` | Active | NVDEC header |
+| `system/loggerd/encoder/nvenc_encoder.cc` | Active | NVENC H.264 encoder |
+| `system/loggerd/encoder/nvenc_encoder.h` | Active | NVENC header |
+| `system/hardware/jetson/hardware.py` | Active | Jetson hardware class + DFS + watchdog |
+| `system/hardware/jetson/dfs.py` | Active | Dynamic Frequency Scaling |
+| `system/hardware/jetson/fan_controller.py` | Active | Fan controller PID |
+| `system/hardware/jetson/hugepages.py` | Active | Huge pages 512MB + THP |
+| `system/hardware/jetson/tmpfs_logger.py` | Active | tmpfs log staging |
+| `system/camerad/cameras/camera_jetson.py` | Ready | Camera CSI V4L2 |
+| `system/camerad/jetson_camerad.py` | Ready | Camera daemon |
+| `scripts/jetson_replay.sh` | Active | Replay with VNC and DPMS fix |
+| `scripts/jetson_stress_test.sh` | Active | 12h stress test with watchdog |
+| `scripts/jetson_install_tensorrt.sh` | Active | TensorRT + trt_runtime.so install |
+
+## FILES MODIFIED
+
+| File | Change |
+|------|--------|
 | `cereal/services.py` | `from __future__ import annotations` (Python 3.8) |
-| `tinygrad_repo/examples/openpilot/compile3.py` | FP16 output sem cast para FP32 |
-| `selfdrive/modeld/modeld.py` | CUDA env vars + TensorRT fallback + core affinity [3,4] |
-| `selfdrive/modeld/dmonitoringmodeld.py` | CUDA env vars + DLA/TensorRT fallback + core 6 |
-| `selfdrive/modeld/SConscript` | jarch64 flags + nvcc compile .cu + cudart link |
-| `selfdrive/modeld/models/commonmodel.h` | Removido zero-copy falso, path honesto |
-| `selfdrive/controls/controlsd.py` | Core 1 no Jetson |
-| `selfdrive/car/card.py` | Core 2 no Jetson |
-| `selfdrive/selfdrived/selfdrived.py` | Cores [5,6] no Jetson |
-| `selfdrive/controls/plannerd.py` | Core 5 |
-| `selfdrive/controls/radard.py` | Core 5 |
-| `selfdrive/monitoring/dmonitoringd.py` | Core 7 no Jetson |
-| `selfdrive/locationd/torqued.py` | Core 7 no Jetson |
-| `selfdrive/locationd/paramsd.py` | Core 7 no Jetson |
-| `selfdrive/locationd/locationd.py` | Core 7 no Jetson |
-| `selfdrive/locationd/calibrationd.py` | Core 7 no Jetson |
-| `selfdrive/locationd/lagd.py` | Core 7 no Jetson |
-| `selfdrive/controls/lib/lateral_mpc_lib/lat_mpc.py` | N=32 → N=24 |
+| `tinygrad_repo/examples/openpilot/compile3.py` | FP16 output without cast to FP32 |
+| `selfdrive/modeld/modeld.py` | CUDA env vars + zero-copy bridge + core [3,4] |
+| `selfdrive/modeld/dmonitoringmodeld.py` | CUDA env vars + DLA/TRT fallback + core 6 |
+| `selfdrive/modeld/SConscript` | jarch64 flags + nvcc + cudart + trt_runtime.so |
+| `selfdrive/modeld/models/commonmodel.h` | Removed false zero-copy |
+| `selfdrive/controls/controlsd.py` | Core 1 on Jetson |
+| `selfdrive/car/card.py` | Core 2 on Jetson |
+| `selfdrive/selfdrived/selfdrived.py` | Core 5 on Jetson |
+| `selfdrive/controls/plannerd.py` | Core 7 on Jetson |
+| `selfdrive/controls/radard.py` | Core 7 on Jetson |
+| `selfdrive/monitoring/dmonitoringd.py` | Core 7 on Jetson |
+| `selfdrive/locationd/locationd.py` | Core 0 on Jetson |
+| `selfdrive/locationd/calibrationd.py` | Core 0 on Jetson |
+| `selfdrive/locationd/torqued.py` | Core 7 on Jetson |
+| `selfdrive/locationd/paramsd.py` | Core 7 on Jetson |
+| `selfdrive/locationd/lagd.py` | Core 7 on Jetson |
+| `selfdrive/controls/lib/lateral_mpc_lib/lat_mpc.py` | N=32→N=24 |
 | `opendbc_repo/opendbc/car/vehicle_model.py` | _slip_factor_cache |
-| `system/hardware/hw.py` | tmpfs log root para Jetson |
+| `system/hardware/hw.py` | tmpfs log root for Jetson |
 | `system/loggerd/SConscript` | Link vipc_extra_libs + nvenc_encoder |
 | `system/loggerd/encoderd.cc` | `#ifdef __JETSON__` → NvencEncoder |
 | `tools/replay/SConscript` | Link vipc_extra_libs + nvdec_decoder |
 | `msgq_repo/SConscript` | jarch64 build path + vipc_extra_libs |
-| `system/manager/process_config.py` | Registrado jetson_camerad |
+| `msgq_repo/msgq/visionipc/visionbuf.h` | Added d_addr for CUDA mapped pointer |
+| `msgq_repo/msgq/visionipc/visionbuf_jetson.cc` | cudaHostRegisterMapped + error checks |
+| `system/manager/process_config.py` | Registered jetson_camerad |
 
 ---
 
-## ROADMAP DE IMPLEMENTACAO
+## ROADMAP
 
-### Semana 1-2: Quick Wins + Inferencia CUDA
-- [x] FP16 end-to-end (compile3.py)
-- [x] CUDA Graphs (JIT_BATCH_SIZE=32)
-- [x] Tensor Cores (TC=1)
-- [x] VisionBuf pinned memory (cudaHostRegister)
-- [x] Python 3.8 compatibility fix (services.py)
-- [x] Build system (SConscripts, vipc_extra_libs)
+### Done (Weeks 1-6)
+- [x] FP16, CUDA Graphs, Tensor Cores, VisionBuf pinned
+- [x] TensorRT runner, NVDLA runner, Camera CSI V4L2
+- [x] NVDEC, NVENC, native CUDA kernels
+- [x] Core affinity, MPC N=24, slip_factor cache
+- [x] Power management, DFS, fan PID, tmpfs logs, huge pages
+- [x] CUDA zero-copy preprocessing (15.85ms, 2.9x faster)
+- [x] Benchmark script, stress test 12h
+- [x] Pipeline safety: bounds checks, slot reuse, error handling
+- [x] Ring buffer single-copy optimization
+- [x] loadyuv kernel truncation fix
+- [x] TensorRT/DLA Python compatibility fix
+- [x] Core affinity redistribution (core 7 overload fix)
+- [x] VisionBuf upgraded to cudaHostRegisterMapped
 
-### Semana 3: Runners + Camera
-- [x] TensorRT runner (codigo pronto, script de instalacao)
-- [x] NVDLA runner (ativa com TensorRT)
-- [x] Camera CSI V4L2 driver
-- [x] Camera daemon com fallback
-
-### Semana 4: Testing + Fixes
-- [x] Replay script com VNC otimizado
-- [x] DPMS fix (UI 1fps)
-- [x] Stress test 12h com watchdog
-- [x] Fix USE_TC → TC
-- [x] Fix CUDA_OPT removal
-- [x] Fix zero-copy falso em commonmodel.h
-
-### Semana 5: Hardware Acceleration + System
-- [x] NVDEC hardware decode (nvdec_decoder.cc)
-- [x] NVENC hardware encode (nvenc_encoder.cc)
-- [x] Kernels CUDA nativos (transform.cu, loadyuv.cu, headers, commonmodel_cuda.h)
-- [x] Core affinity completo (8 cores, 11 processos)
-- [x] MPC N=24 (lat_mpc.py)
-- [x] Cache slip_factor (vehicle_model.py)
-- [x] Modo parked 10W (hardware.py)
-- [x] Dynamic Frequency Scaling (dfs.py)
-- [x] Fan controller PID (fan_controller.py)
-- [x] tmpfs buffer para logs (tmpfs_logger.py + hw.py)
-- [x] Huge Pages CUDA 512MB (hugepages.py + hardware.py)
-- [x] Script instalacao TensorRT (jetson_install_tensorrt.sh)
-
-### Semana 6: CUDA Zero-Copy + Benchmark
-- [x] CUDA zero-copy preprocessing (commonmodel_cuda.h, cuda_frame_bridge.cpp)
-- [x] Fix CUDA stream invalidation by tinygrad context (default stream 0)
-- [x] Lazy GPU memory allocation (after tinygrad init)
-- [x] Ring buffer temporal (5 slots) para contexto multi-frame
-- [x] Tensor.from_blob() zero-copy GPU→GPU path (modeld.py)
-- [x] Fix upload size para padded YUV420 (uv_offset + stride*height/2)
-- [x] Benchmark script (tools/jetson/benchmark_modeld.py)
-- [x] Resultado: 15.85ms median, 0% frame drops, 2.9x mais rapido que OpenCL
-
-### Pendente
-- [ ] Instalar TensorRT na Jetson (`sudo ./scripts/jetson_install_tensorrt.sh`)
-- [ ] UI fullscreen + VSync
-- [ ] Eliminar render texture overhead
-- [ ] NV12 format nativo (eliminar conversoes)
-- [ ] DMA-BUF para VisionBuf (true zero-copy)
-- [ ] Precompiled Python + boot otimizado
-- [ ] Teste com camera real e veiculo
+### Pending
+- [ ] Install TensorRT on Jetson (`sudo bash scripts/jetson_install_tensorrt.sh`)
+- [ ] UI fullscreen + VSync optimization
+- [ ] Render texture elimination
+- [ ] NV12 native format (eliminate conversions)
+- [ ] DMA-BUF for VisionBuf camera pipeline
+- [ ] Precompiled Python + boot optimization
+- [ ] Real camera + vehicle testing
