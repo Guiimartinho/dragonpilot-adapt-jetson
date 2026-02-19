@@ -85,24 +85,26 @@ protected:
   /** Lazily allocate GPU memory on first prepare() (after tinygrad CUDA context is active). */
   void ensure_gpu_initialized() {
     if (gpu_initialized_) return;
-    gpu_initialized_ = true;
 
-    cudaMalloc(&d_input_, deferred_input_size_);
-    cudaMalloc(&d_y_, deferred_model_width_ * deferred_model_height_);
-    cudaMalloc(&d_u_, (deferred_model_width_ / 2) * (deferred_model_height_ / 2));
-    cudaMalloc(&d_v_, (deferred_model_width_ / 2) * (deferred_model_height_ / 2));
-    cudaMalloc(&d_output_, deferred_output_size_);
+    cudaError_t err;
+    err = cudaMalloc(&d_input_, deferred_input_size_);
+    if (err != cudaSuccess) { fprintf(stderr, "CUDA ERROR cudaMalloc d_input_: %s\n", cudaGetErrorString(err)); return; }
+    err = cudaMalloc(&d_y_, deferred_model_width_ * deferred_model_height_);
+    if (err != cudaSuccess) { fprintf(stderr, "CUDA ERROR cudaMalloc d_y_: %s\n", cudaGetErrorString(err)); return; }
+    err = cudaMalloc(&d_u_, (deferred_model_width_ / 2) * (deferred_model_height_ / 2));
+    if (err != cudaSuccess) { fprintf(stderr, "CUDA ERROR cudaMalloc d_u_: %s\n", cudaGetErrorString(err)); return; }
+    err = cudaMalloc(&d_v_, (deferred_model_width_ / 2) * (deferred_model_height_ / 2));
+    if (err != cudaSuccess) { fprintf(stderr, "CUDA ERROR cudaMalloc d_v_: %s\n", cudaGetErrorString(err)); return; }
+    err = cudaMalloc(&d_output_, deferred_output_size_);
+    if (err != cudaSuccess) { fprintf(stderr, "CUDA ERROR cudaMalloc d_output_: %s\n", cudaGetErrorString(err)); return; }
 
     // Use default stream (0) for all sub-objects
     transform_.init(stream_);
     loadyuv_.init(deferred_model_width_, deferred_model_height_, stream_);
 
-    cudaError_t err = cudaGetLastError();
-    if (err != cudaSuccess) {
-      fprintf(stderr, "CUDA ERROR in ensure_gpu_initialized: %s\n", cudaGetErrorString(err));
-    } else {
-      fprintf(stderr, "CudaModelFrame: GPU initialized (default stream, lazy alloc)\n");
-    }
+    // Only set initialized after ALL allocations succeed
+    gpu_initialized_ = true;
+    fprintf(stderr, "CudaModelFrame: GPU initialized (default stream, lazy alloc)\n");
   }
 
   void deinit_cuda() {
@@ -150,7 +152,12 @@ public:
                    int frame_stride, int frame_uv_offset, const mat3& projection) override {
     if (!gpu_initialized_) {
       ensure_gpu_initialized();
-      cudaMalloc(&d_ring_buffer_, ring_size_ * MODEL_FRAME_SIZE);
+      if (!gpu_initialized_) return nullptr;  // allocation failed
+      cudaError_t err = cudaMalloc(&d_ring_buffer_, ring_size_ * MODEL_FRAME_SIZE);
+      if (err != cudaSuccess) {
+        fprintf(stderr, "CUDA ERROR cudaMalloc ring buffer: %s\n", cudaGetErrorString(err));
+        return nullptr;
+      }
       cudaMemset(d_ring_buffer_, 0, ring_size_ * MODEL_FRAME_SIZE);
       d_last_img_ = d_ring_buffer_ + temporal_skip_ * MODEL_FRAME_SIZE;
       fprintf(stderr, "CudaDrivingModelFrame: ring buffer allocated, ring_size=%d\n", ring_size_);
@@ -158,12 +165,13 @@ public:
 
     upload_and_transform(yuv_data, frame_width, frame_height, frame_stride, frame_uv_offset, projection);
 
-    // Shift ring buffer: move each frame down by one slot (default stream = synchronous)
-    for (int i = 0; i < temporal_skip_; i++) {
+    // Shift ring buffer: single memmove shifts all frames down by one slot
+    // (replaces sequential loop of temporal_skip_ individual cudaMemcpy calls)
+    if (temporal_skip_ > 0) {
       cudaMemcpy(
-        d_ring_buffer_ + i * MODEL_FRAME_SIZE,
-        d_ring_buffer_ + (i + 1) * MODEL_FRAME_SIZE,
-        MODEL_FRAME_SIZE, cudaMemcpyDeviceToDevice);
+        d_ring_buffer_,
+        d_ring_buffer_ + MODEL_FRAME_SIZE,
+        temporal_skip_ * MODEL_FRAME_SIZE, cudaMemcpyDeviceToDevice);
     }
 
     // Load Y/U/V into interleaved format at last slot
@@ -205,6 +213,7 @@ public:
                    int frame_stride, int frame_uv_offset, const mat3& projection) override {
     if (!gpu_initialized_) {
       ensure_gpu_initialized();
+      if (!gpu_initialized_) return nullptr;  // allocation failed
     }
     upload_and_transform(yuv_data, frame_width, frame_height, frame_stride, frame_uv_offset, projection);
 
