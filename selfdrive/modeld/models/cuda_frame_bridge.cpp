@@ -44,20 +44,22 @@ void cuda_driving_frame_destroy(int id) {
 }
 
 /**
- * Prepare frame: upload YUV from host, run CUDA transform + loadyuv.
+ * Prepare frame: run CUDA transform + loadyuv on YUV data.
+ * If d_gpu_ptr is non-null (VisionBuf mapped memory), uses GPU-direct access
+ * and skips the explicit H2D copy.
  * Returns CUDA device pointer to preprocessed frame data.
- * The pointer is stable (same address every call) and valid until destroy().
  */
 uint64_t cuda_driving_frame_prepare(
     int id,
     const uint8_t* yuv_data,
     int width, int height, int stride, int uv_offset,
-    const float* projection)
+    const float* projection,
+    const uint8_t* d_gpu_ptr)
 {
   if (id < 0 || id >= MAX_FRAMES || !g_frames[id]) return 0;
   mat3 m;
   memcpy(m.v, projection, 9 * sizeof(float));
-  uint8_t* result = g_frames[id]->prepare(yuv_data, width, height, stride, uv_offset, m);
+  uint8_t* result = g_frames[id]->prepare(yuv_data, width, height, stride, uv_offset, m, d_gpu_ptr);
   if (!result) return 0;
   return (uint64_t)(uintptr_t)result;
 }

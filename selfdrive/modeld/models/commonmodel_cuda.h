@@ -37,7 +37,8 @@ public:
   }
 
   virtual uint8_t* prepare(const uint8_t* yuv_data, int frame_width, int frame_height,
-                           int frame_stride, int frame_uv_offset, const mat3& projection) = 0;
+                           int frame_stride, int frame_uv_offset, const mat3& projection,
+                           const uint8_t* d_gpu_ptr = nullptr) = 0;
 
   uint8_t* get_host_buffer(int buffer_size) {
     if (!h_output_) {
@@ -118,12 +119,24 @@ protected:
     if (d_input_) cudaFree(d_input_);
   }
 
+  /**
+   * Upload YUV data and run transform. If d_gpu_ptr is non-null (VisionBuf mapped memory),
+   * skip the H2D copy and use the GPU-accessible pointer directly.
+   */
   void upload_and_transform(const uint8_t* yuv_data, int frame_width, int frame_height,
-                            int frame_stride, int frame_uv_offset, const mat3& projection) {
+                            int frame_stride, int frame_uv_offset, const mat3& projection,
+                            const uint8_t* d_gpu_ptr = nullptr) {
     int input_size = frame_uv_offset + (frame_stride * frame_height / 2);
-    cudaMemcpy(d_input_, yuv_data, input_size, cudaMemcpyHostToDevice);
+    const uint8_t* d_src;
+    if (d_gpu_ptr) {
+      // VisionBuf mapped memory: GPU can read host pages via DMA, skip explicit H2D copy
+      d_src = d_gpu_ptr;
+    } else {
+      cudaMemcpy(d_input_, yuv_data, input_size, cudaMemcpyHostToDevice);
+      d_src = d_input_;
+    }
 
-    transform_.queue(d_input_, frame_width, frame_height, frame_stride, frame_uv_offset,
+    transform_.queue(d_src, frame_width, frame_height, frame_stride, frame_uv_offset,
                      d_y_, d_u_, d_v_, MODEL_WIDTH, MODEL_HEIGHT, projection);
   }
 };
@@ -149,7 +162,8 @@ public:
   }
 
   uint8_t* prepare(const uint8_t* yuv_data, int frame_width, int frame_height,
-                   int frame_stride, int frame_uv_offset, const mat3& projection) override {
+                   int frame_stride, int frame_uv_offset, const mat3& projection,
+                   const uint8_t* d_gpu_ptr = nullptr) override {
     if (!gpu_initialized_) {
       ensure_gpu_initialized();
       if (!gpu_initialized_) return nullptr;  // allocation failed
@@ -163,15 +177,16 @@ public:
       fprintf(stderr, "CudaDrivingModelFrame: ring buffer allocated, ring_size=%d\n", ring_size_);
     }
 
-    upload_and_transform(yuv_data, frame_width, frame_height, frame_stride, frame_uv_offset, projection);
+    upload_and_transform(yuv_data, frame_width, frame_height, frame_stride, frame_uv_offset, projection, d_gpu_ptr);
 
-    // Shift ring buffer: single memmove shifts all frames down by one slot
-    // (replaces sequential loop of temporal_skip_ individual cudaMemcpy calls)
-    if (temporal_skip_ > 0) {
-      cudaMemcpy(
-        d_ring_buffer_,
-        d_ring_buffer_ + MODEL_FRAME_SIZE,
-        temporal_skip_ * MODEL_FRAME_SIZE, cudaMemcpyDeviceToDevice);
+    // Shift ring buffer: copy each slot individually to avoid overlapping regions.
+    // cudaMemcpy with overlapping src/dst is UNDEFINED per CUDA spec.
+    // Each per-slot copy is non-overlapping (slot i from slot i+1).
+    for (int i = 0; i < temporal_skip_; i++) {
+      cudaMemcpyAsync(
+        d_ring_buffer_ + i * MODEL_FRAME_SIZE,
+        d_ring_buffer_ + (i + 1) * MODEL_FRAME_SIZE,
+        MODEL_FRAME_SIZE, cudaMemcpyDeviceToDevice, stream_);
     }
 
     // Load Y/U/V into interleaved format at last slot
@@ -210,7 +225,8 @@ public:
   }
 
   uint8_t* prepare(const uint8_t* yuv_data, int frame_width, int frame_height,
-                   int frame_stride, int frame_uv_offset, const mat3& projection) override {
+                   int frame_stride, int frame_uv_offset, const mat3& projection,
+                   const uint8_t* d_gpu_ptr = nullptr) override {
     if (!gpu_initialized_) {
       ensure_gpu_initialized();
       if (!gpu_initialized_) return nullptr;  // allocation failed
