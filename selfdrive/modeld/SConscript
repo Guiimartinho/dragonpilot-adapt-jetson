@@ -51,7 +51,7 @@ if arch == "jarch64":
   lenv.Command(
     'models/cuda_frame_bridge.so',
     ['models/cuda_frame_bridge.cpp'] + cuda_objects,
-    f'g++ -shared -fPIC -O2 -std=c++17 -D__JETSON__ '
+    f'g++ -shared -fPIC -O2 -std=c++17 -D__JETSON__ -march=armv8.2-a+fp16+dotprod '
     f'-I{Dir("#").abspath} -I/usr/local/cuda/include '
     f'-o $TARGET $SOURCES '
     f'-lcudart -L/usr/local/cuda/lib64'
@@ -88,7 +88,7 @@ def tg_compile(flags, model_name):
 for model_name in ['driving_vision', 'driving_policy', 'dmonitoring_model']:
   flags = {
     'larch64': 'DEV=QCOM FLOAT16=1 NOLOCALS=1 IMAGE=2 JIT_BATCH_SIZE=0',
-    'jarch64': 'DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=32 TC=1',  # Volta sm_72 tensor cores
+    'jarch64': 'DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=16 TC=1 BEAM=2',  # Volta sm_72 tensor cores + autotuner
     'Darwin': f'DEV=CPU HOME={os.path.expanduser("~")}', # tinygrad calls brew which needs a $HOME in the env
   }.get(arch, 'DEV=CPU CPU_LLVM=1')
   tg_compile(flags, model_name)

@@ -117,7 +117,7 @@ elif arch == "jarch64":
     "/usr/lib/aarch64-linux-gnu",
     "/usr/local/cuda/lib64",
   ])
-  arch_flags = ["-D__JETSON__", "-mcpu=cortex-a57"]
+  arch_flags = ["-D__JETSON__", "-march=armv8.2-a+fp16+dotprod", "-mtune=cortex-a76"]
   env.Append(CCFLAGS=arch_flags)
   env.Append(CXXFLAGS=arch_flags)
 elif arch == "Darwin":

@@ -143,7 +143,7 @@ protected:
 
 class CudaDrivingModelFrame : public CudaModelFrame {
 public:
-  CudaDrivingModelFrame(int temporal_skip) : temporal_skip_(temporal_skip) {
+  CudaDrivingModelFrame(int temporal_skip) {
     const int mw = 512, mh = 256;
     MODEL_WIDTH = mw;
     MODEL_HEIGHT = mh;
@@ -196,7 +196,6 @@ public:
   }
 
 private:
-  int temporal_skip_;
   int ring_size_;
   int write_idx_ = 0;
   uint8_t* d_ring_buffer_ = nullptr;
