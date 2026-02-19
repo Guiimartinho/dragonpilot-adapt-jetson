@@ -11,8 +11,9 @@ elif JETSON:
   os.environ['CUDA_LAUNCH_BLOCKING'] = '0'  # Async kernel launches
   os.environ['CUDA_DEVICE_ORDER'] = 'PCI_BUS_ID'
   os.environ['CUDA_VISIBLE_DEVICES'] = '0'
+  os.environ['CUDA_MODULE_LOADING'] = 'LAZY'  # Defer unused module loading
   os.environ.setdefault('FLOAT16', '1')  # FP16 for Volta tensor cores
-  os.environ.setdefault('JIT_BATCH_SIZE', '32')  # Consolidate kernels into unified CUDA graph
+  os.environ.setdefault('JIT_BATCH_SIZE', '16')  # Consolidate kernels into unified CUDA graph
   os.environ.setdefault('TC', '1')  # Enable tensor cores on Volta sm_72
 else:
   os.environ['DEV'] = 'CPU'
@@ -246,6 +247,7 @@ class ModelState:
       name: self._cuda_bridge.cuda_driving_frame_create(temporal_skip)
       for name in self.vision_input_names
     }
+    self._d_addr_logged = False
 
   def slice_outputs(self, model_outputs: np.ndarray, output_slices: dict[str, slice]) -> dict[str, np.ndarray]:
     parsed_model_outputs = {k: model_outputs[np.newaxis, v] for k,v in output_slices.items()}
@@ -266,6 +268,12 @@ class ModelState:
         proj = transforms[name].flatten()
         # Pass d_addr for GPU-direct access (skips cudaMemcpy H2D if available)
         d_gpu_ptr = self._ctypes.c_void_p(buf.d_addr) if hasattr(buf, 'd_addr') and buf.d_addr else None
+        if not self._d_addr_logged:
+          self._d_addr_logged = True
+          if d_gpu_ptr:
+            cloudlog.warning("modeld: VisionBuf d_addr=0x%x (GPU-direct DMA active)", buf.d_addr)
+          else:
+            cloudlog.warning("modeld: VisionBuf d_addr is NULL, using H2D copy fallback")
         dev_ptr = self._cuda_bridge.cuda_driving_frame_prepare(
           self._cuda_frame_ids[name],
           self._ctypes.c_void_p(buf.data.ctypes.data),
@@ -276,8 +284,9 @@ class ModelState:
         if dev_ptr == 0:
           cloudlog.error("cuda_driving_frame_prepare failed for %s", name)
           continue
-        # Zero-copy: wrap CUDA device pointer as tinygrad tensor
-        self.vision_inputs[name] = Tensor.from_blob(dev_ptr, self.vision_input_shapes[name], dtype=dtypes.uint8, device='CUDA').realize()
+        # Zero-copy: wrap CUDA device pointer as tinygrad tensor (cached, stable ptr)
+        if name not in self.vision_inputs:
+          self.vision_inputs[name] = Tensor.from_blob(dev_ptr, self.vision_input_shapes[name], dtype=dtypes.uint8, device='CUDA').realize()
     else:
       imgs_cl = {name: self.frames[name].prepare(bufs[name], transforms[name].flatten()) for name in self.vision_input_names}
 
@@ -299,9 +308,7 @@ class ModelState:
     # JIT_BATCH_SIZE=32 consolidates kernels into unified graphs for minimal launch overhead.
     # With FLOAT16=1 on Jetson, tinygrad outputs float16 — cast to float32 for downstream
     # numpy compatibility (np.linalg, np.polynomial don't support float16)
-    self.vision_output = self.vision_run(**self.vision_inputs).contiguous().realize().uop.base.buffer.numpy()
-    if self.vision_output.dtype != np.float32:
-      self.vision_output = self.vision_output.astype(np.float32)
+    self.vision_output = self.vision_run(**self.vision_inputs).contiguous().float().realize().uop.base.buffer.numpy()
 
     vision_outputs_dict = self.parser.parse_vision_outputs(self.slice_outputs(self.vision_output, self.vision_output_slices))
 
@@ -310,9 +317,7 @@ class ModelState:
       self.numpy_inputs[k][:] = self.full_input_queues.get(k)[k]
     self.numpy_inputs['traffic_convention'][:] = inputs['traffic_convention']
 
-    self.policy_output = self.policy_run(**self.policy_inputs).contiguous().realize().uop.base.buffer.numpy()
-    if self.policy_output.dtype != np.float32:
-      self.policy_output = self.policy_output.astype(np.float32)
+    self.policy_output = self.policy_run(**self.policy_inputs).contiguous().float().realize().uop.base.buffer.numpy()
 
     if not self._jit_warmed_up:
       self._jit_warmed_up = True
