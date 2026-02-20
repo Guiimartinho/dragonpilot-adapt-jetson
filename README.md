@@ -22,7 +22,10 @@
 ### Running on Jetson AGX Xavier
 
 ![DragonPilot running on Jetson AGX Xavier](docs/jetson/assets/ui_running_on_jetson.png)
-*DragonPilot UI with real-time CUDA inference on Jetson AGX Xavier — modeld 15.85ms median (CUDA zero-copy, 2.9x faster than OpenCL)*
+*DragonPilot UI with real-time CUDA inference on Jetson AGX Xavier — lane detection and road view active*
+
+![DragonPilot driving view 2](docs/jetson/assets/ui_running_on_jetson_2.png)
+*DragonPilot driving view with lane lines, DMS indicator and road camera feed — modeld 13.66ms median, 20 FPS, 0 errors*
 
 ## About This Project
 
@@ -49,7 +52,7 @@ The Jetson AGX Xavier offers **5x the AI performance** with **8x the RAM**, maki
 | Platform Detection (`/JETSON` + `jarch64`) | Working | SConstruct, hardware init |
 | Hardware Abstraction (thermal, power, fan) | Working | Full Jetson class with INA3221 power, PWM fan, thermal zones |
 | CUDA Model Compilation (tinygrad) | Working | driving_vision, driving_policy, dmonitoring_model |
-| CUDA Zero-Copy Preprocessing | Working | 15.85ms median, 0% frame drops, Tensor.from_blob |
+| CUDA Zero-Copy Preprocessing | Working | 13.66ms median, 0% frame drops, Tensor.from_blob |
 | scons Build (`-j8`) | Working | All C++/Cython targets compile cleanly |
 | Core Processes (hardwared, pandad, loggerd...) | Working | All green on manager status line |
 | UI (raylib) | Requires Display | Needs X11 DISPLAY or headless mode |
@@ -163,7 +166,7 @@ dragonpilot-adapt-jetson/
 
 ## Model Performance (Jetson AGX Xavier)
 
-**modeld**: 15.85ms median (CUDA zero-copy) | 0% frame drops | 2.9x faster than OpenCL
+**modeld**: 13.66ms median (CUDA zero-copy + BEAM=2) | 20 FPS stable | 0% frame drops | 3.4x faster than OpenCL
 
 See [Optimization Details](JETSON_OPTIMIZATION.md#benchmarks-single-source-of-truth) for full benchmark data.
 
@@ -198,7 +201,10 @@ MIT License (same as openpilot). See [LICENSE](LICENSE).
 ### Rodando na Jetson AGX Xavier
 
 ![DragonPilot rodando na Jetson AGX Xavier](docs/jetson/assets/ui_running_on_jetson.png)
-*UI do DragonPilot com inferencia CUDA em tempo real na Jetson AGX Xavier — modeld 15.85ms median (CUDA zero-copy, 2.9x mais rapido que OpenCL)*
+*UI do DragonPilot com inferencia CUDA em tempo real na Jetson AGX Xavier — deteccao de faixa e visao da estrada ativas*
+
+![DragonPilot visao de conducao 2](docs/jetson/assets/ui_running_on_jetson_2.png)
+*Visao de conducao com lane lines, indicador DMS e feed da camera — modeld 13.66ms median, 20 FPS, 0 erros*
 
 ## Sobre Este Projeto
 
@@ -322,7 +328,7 @@ USE_WEBCAM=1 python3 -c "from openpilot.system.manager.manager import main; main
 
 ## Performance dos Modelos (Jetson AGX Xavier)
 
-**modeld**: 15.85ms median (CUDA zero-copy) | 0% frame drops | 2.9x mais rapido que OpenCL
+**modeld**: 13.66ms median (CUDA zero-copy + BEAM=2) | 20 FPS estavel | 0% frame drops | 3.4x mais rapido que OpenCL
 
 Veja [Detalhes de Otimizacao](JETSON_OPTIMIZATION.md#benchmarks-single-source-of-truth) para dados completos de benchmark.
 
