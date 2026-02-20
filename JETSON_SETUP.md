@@ -2,6 +2,8 @@
 
 Como rodar o DragonPilot na Jetson. Para detalhes tecnicos e benchmarks, veja [JETSON_OPTIMIZATION.md](JETSON_OPTIMIZATION.md).
 
+> **Performance atual**: modeld 13.66ms median, 20 FPS, 0 errors | dmonitoringmodeld 20.65ms median | GPU 8.6% | CPU 48.9C
+
 ## Conexao SSH
 ```
 ssh xavier@192.168.3.152

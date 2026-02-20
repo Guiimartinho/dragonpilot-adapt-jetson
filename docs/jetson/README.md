@@ -3,7 +3,10 @@
 Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 
 ![DragonPilot rodando na Jetson AGX Xavier](assets/ui_running_on_jetson.png)
-*UI do DragonPilot rodando na Jetson AGX Xavier via replay demo*
+*UI do DragonPilot rodando na Jetson AGX Xavier via replay demo — deteccao de faixa ativa*
+
+![DragonPilot visao 2](assets/ui_running_on_jetson_2.png)
+*Visao de conducao com lane lines, DMS e camera — 13.66ms median, 20 FPS*
 
 ## Status
 
@@ -11,18 +14,36 @@ Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 |------------|--------|----------|
 | Build system (`jarch64`) | OK | scons compila sem erros, nvcc para CUDA kernels |
 | Hardware abstraction | OK | Classe Jetson com thermal, fan, DFS, hugepages |
-| Inferencia CUDA (modeld) | OK | 15.85ms median, 0% frame drops, 2.9x vs OpenCL |
+| Inferencia CUDA (modeld) | OK | **13.66ms median, 20 FPS, 0% frame drops, 3.4x vs OpenCL** |
+| dmonitoringmodeld | OK | **20.65ms median, CUDA zero-copy + DLA/TRT fallback** |
 | TensorRT (opcional) | OK | Script de instalacao pronto, 2-3x speedup esperado |
 | DLA (dmonitoring) | OK | Fallback chain: DLA0→DLA1→GPU TensorRT→tinygrad |
 | CUDA kernels nativos | OK | transform.cu + loadyuv.cu compilados via nvcc |
-| CUDA zero-copy preprocessing | OK | Tensor.from_blob, default stream, lazy GPU init |
-| UI (raylib/OpenGL) | OK | 60 FPS, fullscreen, VSync, render texture |
+| CUDA zero-copy (driving + dmon) | OK | Tensor.from_blob, default stream, lazy GPU init |
+| fill_model_msg batched | OK | 42 .tolist()→~12, bulk T.tolist() conversions |
+| UI (raylib/OpenGL) | OK | Core 6, OpenGL rendering, VSync |
 | Replay (NVDEC) | OK | Decode HW via V4L2/CUDA hwaccel |
 | Encoder (NVENC) | OK | h264_nvmpi / h264_nvenc |
-| Core affinity (8 cores) | OK | SCHED_FIFO, distribuicao otimizada |
+| Core affinity (8 cores) | OK | SCHED_FIFO, distribuicao otimizada, UI core 6 |
 | Power management | OK | MAXN 30W dirigindo, MODE_10W estacionado |
+| BEAM=2 autotuner | OK | Kernel optimization para Volta sm_72 |
 | Camera USB (webcam) | Pendente | webcamerad pronto, falta testar |
 | Panda USB (CAN) | Pendente | pandad pronto, falta conectar hardware |
+
+## Benchmarks Reais (60s, 1200 frames)
+
+| Metrica | Valor |
+|---------|-------|
+| modeld median | **13.66ms** |
+| modeld P95/P99 | 14.74ms / 15.64ms |
+| modeld FPS | **20.0 (estavel)** |
+| dmonitoringmodeld median | **20.65ms** |
+| Frame drops | **0 (0%)** |
+| Erros (>50ms) | **0** |
+| CPU temp | 48.9C avg / 49.0C max |
+| GPU temp | 48.5C avg |
+| GPU usage | 8.6% |
+| RAM usage | 18.0% (~5.8 GB / 32 GB) |
 
 ## Documentacao
 
@@ -42,12 +63,13 @@ Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 comma Tici (Snapdragon 845)          Jetson AGX Xavier (Volta)
 ─────────────────────────────        ─────────────────────────────
 Qualcomm Spectra ISP (camera)   →    USB webcam / MIPI CSI-2
-Adreno 618 GPU (OpenCL)        →    Volta GPU (CUDA sm_72)
-ION memory allocator            →    Standard OpenCL (visionbuf_cl)
-tinygrad DEV=QCOM               →    tinygrad DEV=CUDA FLOAT16=1
+Adreno 618 GPU (OpenCL)        →    Volta GPU (CUDA sm_72, zero-copy)
+ION memory allocator            →    cudaHostRegisterMapped (GPU-direct)
+tinygrad DEV=QCOM               →    tinygrad DEV=CUDA FLOAT16=1 TC=1 BEAM=2
 V4L2 encoder (Qualcomm)        →    NVENC (h264_nvmpi)
 Qualcomm NVDEC                  →    NVDEC (V4L2 nvv4l2dec)
 AGNOS (custom Android)          →    JetPack 5.x (Ubuntu 20.04)
+modeld ~12ms                    →    modeld 13.66ms (competitive)
 ```
 
 ## Quick Start
