@@ -11,7 +11,7 @@ Hardware: 8 cores ARM Carmel 2.26GHz, 512 CUDA cores Volta sm_72, 64 tensor core
 | # | Optimization | Status | Result |
 |---|-------------|--------|--------|
 | 1 | FP16 end-to-end (Tensor Cores) | Done | compile3.py keeps FP16 on GPU |
-| 2 | CUDA Graphs (JIT_BATCH_SIZE=32) | Done | 122 kernels in 3 graphs, ~8.8ms inference |
+| 2 | CUDA Graphs (JIT_BATCH_SIZE=16) | Done | Kernels consolidated into CUDA graphs, ~8.8ms inference |
 | 3 | Tensor Cores (TC=1) | Done | 64 Volta tensor cores active |
 | 4 | VisionBuf mapped memory (cudaHostRegisterMapped) | Done | GPU-direct access via cudaHostGetDevicePointer |
 | 5 | TensorRT runner + install script | Done | Auto-fallback to tinygrad |
@@ -30,54 +30,79 @@ Hardware: 8 cores ARM Carmel 2.26GHz, 512 CUDA cores Volta sm_72, 64 tensor core
 | 18 | Fan controller PID | Done | Target 65C driving, 70C parked, 5% hysteresis |
 | 19 | tmpfs log buffer | Done | /dev/shm staging, flush NVMe 5s |
 | 20 | Huge Pages CUDA | Done | 256 x 2MB (512MB) for TLB |
-| 21 | CUDA zero-copy preprocessing | Done | 46ms→16ms (2.9x), 0% frame drops |
+| 21 | CUDA zero-copy preprocessing (driving) | Done | 46ms→13.66ms (3.4x), 0% frame drops |
 | 22 | Benchmark script | Done | tools/jetson/benchmark_modeld.py |
 | 23 | Ring buffer optimization | Done | Single cudaMemcpy replaces sequential loop |
 | 24 | loadyuv kernel truncation fix | Done | Handles last <8 bytes correctly |
 | 25 | CUDA pipeline safety | Done | Bounds checks, slot reuse, error validation |
 | 26 | TensorRT/DLA Python 3.8+ fix | Done | `from __future__ import annotations` |
+| 27 | CUDA zero-copy preprocessing (dmon) | Done | CudaMonitoringModelFrame in cuda_frame_bridge |
+| 28 | Batched .tolist() in fill_model_msg | Done | 42 calls→~12, bulk T.tolist() conversions |
+| 29 | UI core affinity fix | Done | UI pinned to core 6, no longer collides with locationd |
+| 30 | BEAM=2 autotuner | Done | tinygrad kernel optimization for Volta sm_72 |
 
 ---
 
 ## BENCHMARKS (Single Source of Truth)
 
-### modeld End-to-End (CUDA Zero-Copy, 3min, 2639 frames)
+> Measured on real system running replay + modeld + dmonitoringmodeld + UI, 60s collection, 1200 frames.
+
+### modeld End-to-End (CUDA Zero-Copy + BEAM=2, 60s, 1200 frames)
 
 | Metric | Value |
 |--------|-------|
-| **modeld execution (median)** | **15.85ms** |
-| modeld execution (mean) | 15.95ms |
-| modeld execution (P95) | 16.64ms |
-| modeld execution (P99) | 17.49ms |
-| modeld execution (max) | 21.18ms |
-| modeld stddev | 0.44ms |
+| **modeld execution (median)** | **13.66ms** |
+| modeld execution (mean) | 13.76ms |
+| modeld execution (P95) | 14.74ms |
+| modeld execution (P99) | 15.64ms |
+| modeld execution (min) | 13.13ms |
+| modeld execution (max) | 18.74ms |
+| modeld stddev | 0.47ms |
 | **Frame drops** | **0 (0.00%)** |
-| FPS (avg) | 14.7 |
-| FPS (median) | 14.8 |
-| dmonitoringmodeld (median) | 20.83ms |
+| **FPS** | **20.0 (stable)** |
+| Errors (>50ms) | 0 |
+
+### dmonitoringmodeld (tinygrad CUDA, 60s, 1201 frames)
+
+| Metric | Value |
+|--------|-------|
+| **dmon execution (median)** | **20.65ms** |
+| dmon execution (mean) | 21.26ms |
+| dmon execution (P95) | 24.72ms |
+| dmon execution (P99) | 26.10ms |
+| dmon execution (min) | 19.22ms |
+| dmon execution (max) | 33.47ms |
 
 ### OpenCL vs CUDA Zero-Copy
 
 | Metric | OpenCL (POCL) | CUDA Zero-Copy | Improvement |
 |--------|--------------|----------------|-------------|
-| modeld execution | ~46ms | **15.85ms** | **2.9x faster** |
+| modeld execution | ~46ms | **13.66ms** | **3.4x faster** |
 | Frame drops | frequent | **0%** | eliminated |
 | Pipeline | CL→CPU→CUDA roundtrip | GPU direct (zero-copy) | no D2H/H2D |
 
-### System Resources
+### System Resources (60s average)
 
 | Metric | Value |
 |--------|-------|
-| Vision inference only | 8.68-9.52ms (avg 8.85ms) |
-| CUDA kernels | 122 (3 graphs: 32+64+26) |
-| GPU usage (median) | 8.1% |
-| CPU usage (median) | 16.4% |
-| RAM usage | ~5.5 GB / 32 GB |
-| GPU temp (max) | 51.0C |
-| CPU temp (max) | 53.0C |
-| UI FPS | 50-60+ fps |
+| CPU temp (avg / max) | 48.9C / 49.0C |
+| GPU temp (avg) | 48.5C |
+| GPU usage (avg) | 8.6% |
+| RAM usage (avg) | 18.0% (~5.8 GB / 32 GB) |
+| cameraOdometry frames | 1200 (100%) |
+| UI FPS | ~1-2 fps (limited by replay rate) |
 | x11vnc CPU | ~2% idle / ~29% streaming |
 | Stress test 12h | 0 restarts, 0 errors |
+
+### Comparison with comma 3 (Qualcomm Snapdragon 845)
+
+| Metric | comma 3 (official) | Jetson AGX Xavier | Status |
+|--------|-------------------|-------------------|--------|
+| modeld latency | ~12ms | **13.66ms** | Competitive |
+| modeld FPS | 20 | **20** | Equal |
+| DMS latency | ~15ms | **20.65ms** | Acceptable |
+| Errors (>50ms) | 0 | **0** | Equal |
+| GPU headroom | ~60% | **91.4%** | Much better |
 
 ### Individual Model Inference (tinygrad CUDA Graphs)
 
@@ -87,7 +112,7 @@ Hardware: 8 cores ARM Carmel 2.26GHz, 512 CUDA cores Volta sm_72, 64 tensor core
 | driving_policy | 7.0M | ~3.3ms |
 | dmonitoring_model | 9.6M | ~6.5ms |
 
-Compiled with `DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=32 TC=1`.
+Compiled with `DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=16 TC=1 BEAM=2`.
 
 ---
 
@@ -108,6 +133,8 @@ Compiled with `DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=32 TC=1`.
 - `cudaHostUnregister` without error check. Fix: check return and handle `cudaErrorHostMemoryNotRegistered`.
 - TensorRT runner Python syntax: `dict[str, type]` requires Python 3.10+. Fix: `from __future__ import annotations`.
 - dmonitoringmodeld exception catch: `except ImportError` didn't catch `TypeError`/`RuntimeError` from trt_runtime.so. Fix: `except Exception`.
+- UI core 6 collides with locationd core 0: UI used `cores = {0}` on Jetson. Fix: `cores = {6}` and apply after JETSON check.
+- fill_model_msg 42x `.tolist()` overhead: each small numpy array called `.tolist()` individually. Fix: batch via `array.T.tolist()` (1 call for 3-6 columns).
 
 ---
 
@@ -145,7 +172,19 @@ Replaces OpenCL kernels, compiled with nvcc -arch=sm_72. Eliminates POCL interop
 
 Pipeline: VisionBuf host SHM → cudaMemcpy H2D → CUDA transform+loadyuv → device ptr → Tensor.from_blob() (zero-copy). Default CUDA stream (0) avoids tinygrad context invalidation. Lazy GPU alloc after tinygrad init. Ring buffer: single cudaMemcpy shift (was sequential loop).
 
-**1.9 Huge Pages** — `system/hardware/jetson/hugepages.py`
+**1.9 CUDA Zero-Copy dmonitoringmodeld** — `cuda_frame_bridge.cpp`, `dmonitoringmodeld.py`
+
+CudaMonitoringModelFrame: VisionBuf → cudaMemcpy H2D → CUDA transform → device ptr → Tensor.from_blob(). Same zero-copy pattern as driving model. Falls back to OpenCL if CUDA bridge not available.
+
+**1.10 Batched .tolist() Optimization** — `fill_model_msg.py`
+
+Reduced 42 individual `.tolist()` calls to ~12 bulk conversions. 2D numpy arrays pre-converted via `array.T.tolist()` (1 call per structure instead of per-column). Applies to plan, lane lines, road edges, leads, meta, and pose data.
+
+**1.11 BEAM=2 Autotuner** — `SConscript`
+
+tinygrad `BEAM=2` searches 2 kernel variants during compilation, selecting the fastest for Volta sm_72. One-time ~30min cost, results cached in .pkl files.
+
+**1.12 Huge Pages** — `system/hardware/jetson/hugepages.py`
 
 256 x 2MB = 512MB pre-allocated for CUDA. THP in madvise mode. 5-10% TLB improvement.
 
@@ -178,10 +217,10 @@ Prevents X11 standby from freezing UI at 1fps.
 | 2 | card | 53 (SCHED_FIFO) | Car interface |
 | 3-4 | modeld | 54 (SCHED_FIFO) | CUDA inference |
 | 5 | selfdrived | 53 (SCHED_FIFO) | System state |
-| 6 | dmonitoringmodeld | 5 | CUDA/DLA driver monitoring |
+| 6 | dmonitoringmodeld, UI | 5/51 | CUDA/DLA driver monitoring + UI rendering |
 | 7 | plannerd, radard, paramsd, lagd, torqued, dmonitoringd | 5-51 | Planning + low-priority |
 
-Core 7 reduced from 8 to 6 processes. Core 6 no longer conflicts with selfdrived.
+Core 7 reduced from 8 to 6 processes. UI pinned to core 6 (was core 0, colliding with locationd).
 
 **4.2 MPC N=24** — `lat_mpc.py:28`, ~25% faster with minimal quality loss.
 
@@ -235,8 +274,10 @@ Core 7 reduced from 8 to 6 processes. Core 6 no longer conflicts with selfdrived
 |------|--------|
 | `cereal/services.py` | `from __future__ import annotations` (Python 3.8) |
 | `tinygrad_repo/examples/openpilot/compile3.py` | FP16 output without cast to FP32 |
-| `selfdrive/modeld/modeld.py` | CUDA env vars + zero-copy bridge + core [3,4] |
-| `selfdrive/modeld/dmonitoringmodeld.py` | CUDA env vars + DLA/TRT fallback + core 6 |
+| `selfdrive/modeld/modeld.py` | CUDA env vars + zero-copy bridge + core [3,4] + BEAM=2 |
+| `selfdrive/modeld/dmonitoringmodeld.py` | CUDA env vars + DLA/TRT fallback + core 6 + CUDA zero-copy |
+| `selfdrive/modeld/fill_model_msg.py` | Batched .tolist() (42→~12 calls) |
+| `selfdrive/ui/ui.py` | UI core affinity: core 6 on Jetson (was core 0) |
 | `selfdrive/modeld/SConscript` | jarch64 flags + nvcc + cudart + trt_runtime.so |
 | `selfdrive/modeld/models/commonmodel.h` | Removed false zero-copy |
 | `selfdrive/controls/controlsd.py` | Core 1 on Jetson |
@@ -265,13 +306,17 @@ Core 7 reduced from 8 to 6 processes. Core 6 no longer conflicts with selfdrived
 
 ## ROADMAP
 
-### Done (Weeks 1-6)
+### Done (Weeks 1-7)
 - [x] FP16, CUDA Graphs, Tensor Cores, VisionBuf pinned
 - [x] TensorRT runner, NVDLA runner, Camera CSI V4L2
 - [x] NVDEC, NVENC, native CUDA kernels
 - [x] Core affinity, MPC N=24, slip_factor cache
 - [x] Power management, DFS, fan PID, tmpfs logs, huge pages
-- [x] CUDA zero-copy preprocessing (15.85ms, 2.9x faster)
+- [x] CUDA zero-copy preprocessing driving (13.66ms, 3.4x faster)
+- [x] CUDA zero-copy preprocessing dmonitoringmodeld
+- [x] Batched .tolist() in fill_model_msg (42→~12 calls)
+- [x] UI core affinity fix (core 6, no locationd collision)
+- [x] BEAM=2 autotuner for tinygrad kernel optimization
 - [x] Benchmark script, stress test 12h
 - [x] Pipeline safety: bounds checks, slot reuse, error handling
 - [x] Ring buffer single-copy optimization
