@@ -2,7 +2,7 @@
 
 Como rodar o DragonPilot na Jetson. Para detalhes tecnicos e benchmarks, veja [JETSON_OPTIMIZATION.md](JETSON_OPTIMIZATION.md).
 
-> **Performance atual**: modeld 13.66ms median, 20 FPS, 0 errors | dmonitoringmodeld 20.65ms median | GPU 8.6% | CPU 48.9C
+> **Performance atual**: modeld 13.66ms median, 20 FPS, 0 errors | dmonitoringmodeld 20.65ms median | GPU 8.6% | CPU 48.9C | UI 60 FPS VSync | Display 1920x960 centered
 
 ## Conexao SSH
 ```
@@ -72,7 +72,7 @@ O script `jetson_replay.sh` faz tudo automaticamente:
 
 ### 4b. Iniciar manualmente (se necessario)
 ```bash
-cd /data/openpilot && source launch_env.sh
+cd /data/openpilot && source .venv/bin/activate
 
 # Desabilitar DPMS
 DISPLAY=:0 xset s off && DISPLAY=:0 xset -dpms && DISPLAY=:0 xset s noblank
@@ -93,9 +93,41 @@ nohup ./tools/replay/replay --demo > /tmp/replay.log 2>&1 &
 # Aguardar VisionIPC
 while [ ! -S /tmp/visionipc_camerad ]; do sleep 0.5; done
 
-# UI
-nohup env DISPLAY=:0 BIG=1 SCALE=0.889 .venv/bin/python3 -m selfdrive.ui.ui > /tmp/ui.log 2>&1 &
+# modeld (CUDA zero-copy + tinygrad)
+nohup env FLOAT16=1 TC=1 BEAM=2 JIT_BATCH_SIZE=16 \
+  python3 selfdrive/modeld/modeld.py --demo > /tmp/modeld.log 2>&1 &
+
+# deviceState + pandaStates publisher (necessario para modo demo)
+# Sem pandaStates, a UI nao entra em modo "started" e as linhas do modelo nao renderizam
+nohup python3 -c "
+import time, cereal.messaging as messaging
+pm = messaging.PubMaster(['deviceState', 'pandaStates'])
+while True:
+    msg = messaging.new_message('deviceState')
+    msg.deviceState.started = True
+    msg.deviceState.deviceType = 4  # tici
+    msg.deviceState.freeSpacePercent = 80.0
+    msg.deviceState.memoryUsagePercent = 20
+    msg.deviceState.cpuTempC = [45.0, 45.0, 45.0, 45.0]
+    msg.deviceState.gpuTempC = [45.0]
+    pm.send('deviceState', msg)
+    msg2 = messaging.new_message('pandaStates', 1)
+    msg2.pandaStates[0].pandaType = 3
+    msg2.pandaStates[0].ignitionLine = True
+    msg2.pandaStates[0].ignitionCan = True
+    pm.send('pandaStates', msg2)
+    time.sleep(0.5)
+" > /tmp/devicestate.log 2>&1 &
+
+# UI (centralizada no display 1920x1080)
+nohup env DISPLAY=:0 BIG=1 SCALE=0.889 python3 selfdrive/ui/ui.py > /tmp/ui.log 2>&1 &
 ```
+
+> **Nota**: Para as linhas do modelo (path, lane lines, lead indicators) renderizarem, sao necessarios:
+> 1. `deviceState.started = True` — indica que o sistema esta ativo
+> 2. `pandaStates` com `ignitionLine = True` — habilita `ui_state.ignition`
+> 3. `liveCalibration` — publicado pelo replay, necessario para calibracao da camera
+> 4. `modelV2` — publicado pelo modeld, contem dados de path/lanes/leads
 
 ### 5. Stress Test (12h)
 ```bash
@@ -115,11 +147,23 @@ O stress test inclui watchdog que reinicia processos se morrerem ou a UI travar 
 
 | Parametro | Valor | Descricao |
 |-----------|-------|-----------|
-| `BIG=1` | Ativa 2160x1080 base | Resolucao nativa openpilot |
-| `SCALE=0.889` | 1920/2160 | Escala para caber em 1920x1080 |
-| `DISPLAY=:0` | Xorg com NVIDIA | GPU acelerada (60 FPS) |
+| `BIG=1` | Ativa 2160x1080 base | Resolucao nativa openpilot (comma 3 = 2160x1080) |
+| `SCALE=0.889` | 1920/2160 | Escala para caber em 1920x1080 HDMI |
+| `DISPLAY=:0` | Xorg com NVIDIA | GPU acelerada, VSync, 60 FPS |
+| `ENABLE_VSYNC=1` | Default | Sync vertical, sem tearing |
 | x11vnc `-scale 0.4` | 768x384 | Tamanho compacto no VNC |
-| x11vnc `-clip 1920x960+0+60` | Crop da UI | Captura so a area util |
+| x11vnc `-clip 1920x960+0+60` | Crop da UI | Captura so a area util (pula barras pretas) |
+
+### Resolucao: Comma 3 vs Jetson
+
+| | Comma 3 (original) | Jetson AGX Xavier |
+|--|-------------------|-------------------|
+| Display fisico | 2160x1080 (2:1 ultra-wide) | 1920x1080 (16:9 HDMI) |
+| UI interna | 2160x1080 | 2160x1080 (igual) |
+| SCALE | 1.0 (nativo) | 0.889 |
+| Janela efetiva | 2160x1080 | 1920x960 |
+| Posicionamento | Fullscreen | Centralizado (60px topo + 960px + 60px base) |
+| Pixels | 100% | ~89% do original |
 
 ## Benchmark modeld
 ```bash

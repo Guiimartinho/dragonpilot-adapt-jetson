@@ -2,8 +2,8 @@
 
 Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 
-![DragonPilot rodando na Jetson AGX Xavier](assets/ui_running_on_jetson.png)
-*UI do DragonPilot rodando na Jetson AGX Xavier via replay demo — deteccao de faixa ativa*
+![DragonPilot rodando na Jetson AGX Xavier](assets/ui_running_on_jetson_3.png)
+*Visao de conducao do DragonPilot na Jetson AGX Xavier — path do modelo, lane lines, indicador de lead e DMS ativos a 1920x960*
 
 ![DragonPilot visao 2](assets/ui_running_on_jetson_2.png)
 *Visao de conducao com lane lines, DMS e camera — 13.66ms median, 20 FPS*
@@ -21,12 +21,13 @@ Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 | CUDA kernels nativos | OK | transform.cu + loadyuv.cu compilados via nvcc |
 | CUDA zero-copy (driving + dmon) | OK | Tensor.from_blob, default stream, lazy GPU init |
 | fill_model_msg batched | OK | 42 .tolist()→~12, bulk T.tolist() conversions |
-| UI (raylib/OpenGL) | OK | Core 6, OpenGL rendering, VSync |
+| UI (raylib/OpenGL) | OK | Core 6, VSync, 60 FPS, centered window, model lines active |
 | Replay (NVDEC) | OK | Decode HW via V4L2/CUDA hwaccel |
 | Encoder (NVENC) | OK | h264_nvmpi / h264_nvenc |
 | Core affinity (8 cores) | OK | SCHED_FIFO, distribuicao otimizada, UI core 6 |
 | Power management | OK | MAXN 30W dirigindo, MODE_10W estacionado |
 | BEAM=2 autotuner | OK | Kernel optimization para Volta sm_72 |
+| Display mapping | OK | 2160x1080 → 1920x960 (SCALE=0.889), centered on HDMI |
 | Camera USB (webcam) | Pendente | webcamerad pronto, falta testar |
 | Panda USB (CAN) | Pendente | pandad pronto, falta conectar hardware |
 
@@ -69,6 +70,7 @@ tinygrad DEV=QCOM               →    tinygrad DEV=CUDA FLOAT16=1 TC=1 BEAM=2
 V4L2 encoder (Qualcomm)        →    NVENC (h264_nvmpi)
 Qualcomm NVDEC                  →    NVDEC (V4L2 nvv4l2dec)
 AGNOS (custom Android)          →    JetPack 5.x (Ubuntu 20.04)
+Display 2160x1080 (native)     →    1920x960 (SCALE=0.889, centered)
 modeld ~12ms                    →    modeld 13.66ms (competitive)
 ```
 
