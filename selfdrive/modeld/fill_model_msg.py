@@ -17,37 +17,38 @@ class PublishState:
 
 def fill_xyzt(builder, t, x, y, z, x_std=None, y_std=None, z_std=None):
   builder.t = t
-  builder.x = x.tolist()
-  builder.y = y.tolist()
-  builder.z = z.tolist()
+  builder.x = x
+  builder.y = y
+  builder.z = z
   if x_std is not None:
-    builder.xStd = x_std.tolist()
+    builder.xStd = x_std
   if y_std is not None:
-    builder.yStd = y_std.tolist()
+    builder.yStd = y_std
   if z_std is not None:
-    builder.zStd = z_std.tolist()
+    builder.zStd = z_std
 
 def fill_xyvat(builder, t, x, y, v, a, x_std=None, y_std=None, v_std=None, a_std=None):
   builder.t = t
-  builder.x = x.tolist()
-  builder.y = y.tolist()
-  builder.v = v.tolist()
-  builder.a = a.tolist()
+  builder.x = x
+  builder.y = y
+  builder.v = v
+  builder.a = a
   if x_std is not None:
-    builder.xStd = x_std.tolist()
+    builder.xStd = x_std
   if y_std is not None:
-    builder.yStd = y_std.tolist()
+    builder.yStd = y_std
   if v_std is not None:
-    builder.vStd = v_std.tolist()
+    builder.vStd = v_std
   if a_std is not None:
-    builder.aStd = a_std.tolist()
+    builder.aStd = a_std
 
 def fill_xyz_poly(builder, degree, x, y, z):
-  xyz = np.stack([x, y, z], axis=1)
+  xyz = np.column_stack([x, y, z])
   coeffs = np.polynomial.polynomial.polyfit(ModelConstants.T_IDXS, xyz, deg=degree)
-  builder.xCoefficients = coeffs[:, 0].tolist()
-  builder.yCoefficients = coeffs[:, 1].tolist()
-  builder.zCoefficients = coeffs[:, 2].tolist()
+  c = coeffs.T.tolist()
+  builder.xCoefficients = c[0]
+  builder.yCoefficients = c[1]
+  builder.zCoefficients = c[2]
 
 def fill_lane_line_meta(builder, lane_lines, lane_line_probs):
   builder.leftY = lane_lines[1].y[0]
@@ -82,48 +83,62 @@ def fill_model_msg(base_msg: capnp._DynamicStructBuilder, extended_msg: capnp._D
   modelV2.timestampEof = timestamp_eof
   modelV2.modelExecutionTime = model_execution_time
 
-  # plan
-  fill_xyzt(modelV2.position, ModelConstants.T_IDXS, *net_output_data['plan'][0,:,Plan.POSITION].T, *net_output_data['plan_stds'][0,:,Plan.POSITION].T)
-  fill_xyzt(modelV2.velocity, ModelConstants.T_IDXS, *net_output_data['plan'][0,:,Plan.VELOCITY].T)
-  fill_xyzt(modelV2.acceleration, ModelConstants.T_IDXS, *net_output_data['plan'][0,:,Plan.ACCELERATION].T)
-  fill_xyzt(modelV2.orientation, ModelConstants.T_IDXS, *net_output_data['plan'][0,:,Plan.T_FROM_CURRENT_EULER].T)
-  fill_xyzt(modelV2.orientationRate, ModelConstants.T_IDXS, *net_output_data['plan'][0,:,Plan.ORIENTATION_RATE].T)
+  # plan — batch-convert 2D arrays to Python lists (fewer .tolist() calls)
+  plan = net_output_data['plan'][0]
+  plan_stds = net_output_data['plan_stds'][0]
+  pos = plan[:,Plan.POSITION].T.tolist()
+  pos_std = plan_stds[:,Plan.POSITION].T.tolist()
+  vel = plan[:,Plan.VELOCITY].T.tolist()
+  acc = plan[:,Plan.ACCELERATION].T.tolist()
+  ori = plan[:,Plan.T_FROM_CURRENT_EULER].T.tolist()
+  ori_rate = plan[:,Plan.ORIENTATION_RATE].T.tolist()
+
+  fill_xyzt(modelV2.position, ModelConstants.T_IDXS, *pos, *pos_std)
+  fill_xyzt(modelV2.velocity, ModelConstants.T_IDXS, *vel)
+  fill_xyzt(modelV2.acceleration, ModelConstants.T_IDXS, *acc)
+  fill_xyzt(modelV2.orientation, ModelConstants.T_IDXS, *ori)
+  fill_xyzt(modelV2.orientationRate, ModelConstants.T_IDXS, *ori_rate)
 
   # poly path
-  fill_xyz_poly(driving_model_data.path, ModelConstants.POLY_PATH_DEGREE, *net_output_data['plan'][0,:,Plan.POSITION].T)
+  fill_xyz_poly(driving_model_data.path, ModelConstants.POLY_PATH_DEGREE, *pos)
 
   # action
   modelV2.action = action
 
   # times at X_IDXS of edges and lines aren't used
   LINE_T_IDXS: list[float] = []
+  x_idxs_list = list(ModelConstants.X_IDXS)
 
-  # lane lines
+  # lane lines — batch-convert per lane
   modelV2.init('laneLines', 4)
+  ll_data = net_output_data['lane_lines'][0]
   for i in range(4):
-    lane_line = modelV2.laneLines[i]
-    fill_xyzt(lane_line, LINE_T_IDXS, np.array(ModelConstants.X_IDXS), net_output_data['lane_lines'][0,i,:,0], net_output_data['lane_lines'][0,i,:,1])
+    ll_yz = ll_data[i].T.tolist()
+    fill_xyzt(modelV2.laneLines[i], LINE_T_IDXS, x_idxs_list, *ll_yz)
   modelV2.laneLineStds = net_output_data['lane_lines_stds'][0,:,0,0].tolist()
   modelV2.laneLineProbs = net_output_data['lane_lines_prob'][0,1::2].tolist()
 
   fill_lane_line_meta(driving_model_data.laneLineMeta, modelV2.laneLines, modelV2.laneLineProbs)
 
-  # road edges
+  # road edges — batch-convert per edge
   modelV2.init('roadEdges', 2)
+  re_data = net_output_data['road_edges'][0]
   for i in range(2):
-    road_edge = modelV2.roadEdges[i]
-    fill_xyzt(road_edge, LINE_T_IDXS, np.array(ModelConstants.X_IDXS), net_output_data['road_edges'][0,i,:,0], net_output_data['road_edges'][0,i,:,1])
+    re_yz = re_data[i].T.tolist()
+    fill_xyzt(modelV2.roadEdges[i], LINE_T_IDXS, x_idxs_list, *re_yz)
   modelV2.roadEdgeStds = net_output_data['road_edges_stds'][0,:,0,0].tolist()
 
-  # leads
+  # leads — batch-convert per lead
   modelV2.init('leadsV3', 3)
   for i in range(3):
     lead = modelV2.leadsV3[i]
-    fill_xyvat(lead, ModelConstants.LEAD_T_IDXS, *net_output_data['lead'][0,i].T, *net_output_data['lead_stds'][0,i].T)
+    lead_vals = net_output_data['lead'][0,i].T.tolist()
+    lead_stds = net_output_data['lead_stds'][0,i].T.tolist()
+    fill_xyvat(lead, ModelConstants.LEAD_T_IDXS, *lead_vals, *lead_stds)
     lead.prob = net_output_data['lead_prob'][0,i].tolist()
     lead.probTime = ModelConstants.LEAD_T_OFFSETS[i]
 
-  # meta
+  # meta — bulk convert meta array once
   meta = modelV2.meta
   meta.desireState = net_output_data['desire_state'][0].reshape(-1).tolist()
   meta.desirePrediction = net_output_data['desire_pred'][0].reshape(-1).tolist()
@@ -131,14 +146,15 @@ def fill_model_msg(base_msg: capnp._DynamicStructBuilder, extended_msg: capnp._D
   meta.init('disengagePredictions')
   disengage_predictions = meta.disengagePredictions
   disengage_predictions.t = ModelConstants.META_T_IDXS
-  disengage_predictions.brakeDisengageProbs = net_output_data['meta'][0,Meta.BRAKE_DISENGAGE].tolist()
-  disengage_predictions.gasDisengageProbs = net_output_data['meta'][0,Meta.GAS_DISENGAGE].tolist()
-  disengage_predictions.steerOverrideProbs = net_output_data['meta'][0,Meta.STEER_OVERRIDE].tolist()
-  disengage_predictions.brake3MetersPerSecondSquaredProbs = net_output_data['meta'][0,Meta.HARD_BRAKE_3].tolist()
-  disengage_predictions.brake4MetersPerSecondSquaredProbs = net_output_data['meta'][0,Meta.HARD_BRAKE_4].tolist()
-  disengage_predictions.brake5MetersPerSecondSquaredProbs = net_output_data['meta'][0,Meta.HARD_BRAKE_5].tolist()
-  disengage_predictions.gasPressProbs = net_output_data['meta'][0,Meta.GAS_PRESS].tolist()
-  disengage_predictions.brakePressProbs = net_output_data['meta'][0,Meta.BRAKE_PRESS].tolist()
+  meta_data = net_output_data['meta'][0]
+  disengage_predictions.brakeDisengageProbs = meta_data[Meta.BRAKE_DISENGAGE].tolist()
+  disengage_predictions.gasDisengageProbs = meta_data[Meta.GAS_DISENGAGE].tolist()
+  disengage_predictions.steerOverrideProbs = meta_data[Meta.STEER_OVERRIDE].tolist()
+  disengage_predictions.brake3MetersPerSecondSquaredProbs = meta_data[Meta.HARD_BRAKE_3].tolist()
+  disengage_predictions.brake4MetersPerSecondSquaredProbs = meta_data[Meta.HARD_BRAKE_4].tolist()
+  disengage_predictions.brake5MetersPerSecondSquaredProbs = meta_data[Meta.HARD_BRAKE_5].tolist()
+  disengage_predictions.gasPressProbs = meta_data[Meta.GAS_PRESS].tolist()
+  disengage_predictions.brakePressProbs = meta_data[Meta.BRAKE_PRESS].tolist()
 
   publish_state.prev_brake_5ms2_probs[:-1] = publish_state.prev_brake_5ms2_probs[1:]
   publish_state.prev_brake_5ms2_probs[-1] = net_output_data['meta'][0,Meta.HARD_BRAKE_5][0]
@@ -183,11 +199,13 @@ def fill_pose_msg(msg: capnp._DynamicStructBuilder, net_output_data: dict[str, n
   cameraOdometry.frameId = vipc_frame_id
   cameraOdometry.timestampEof = timestamp_eof
 
-  cameraOdometry.trans = net_output_data['pose'][0,:3].tolist()
-  cameraOdometry.rot = net_output_data['pose'][0,3:].tolist()
+  pose = net_output_data['pose'][0].tolist()
+  pose_stds = net_output_data['pose_stds'][0].tolist()
+  cameraOdometry.trans = pose[:3]
+  cameraOdometry.rot = pose[3:]
   cameraOdometry.wideFromDeviceEuler = net_output_data['wide_from_device_euler'][0,:].tolist()
   cameraOdometry.roadTransformTrans = net_output_data['road_transform'][0,:3].tolist()
-  cameraOdometry.transStd = net_output_data['pose_stds'][0,:3].tolist()
-  cameraOdometry.rotStd = net_output_data['pose_stds'][0,3:].tolist()
+  cameraOdometry.transStd = pose_stds[:3]
+  cameraOdometry.rotStd = pose_stds[3:]
   cameraOdometry.wideFromDeviceEulerStd = net_output_data['wide_from_device_euler_stds'][0,:].tolist()
   cameraOdometry.roadTransformTransStd = net_output_data['road_transform_stds'][0,:3].tolist()
