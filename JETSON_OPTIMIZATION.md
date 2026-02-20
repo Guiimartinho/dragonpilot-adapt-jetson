@@ -40,6 +40,11 @@ Hardware: 8 cores ARM Carmel 2.26GHz, 512 CUDA cores Volta sm_72, 64 tensor core
 | 28 | Batched .tolist() in fill_model_msg | Done | 42 calls→~12, bulk T.tolist() conversions |
 | 29 | UI core affinity fix | Done | UI pinned to core 6, no longer collides with locationd |
 | 30 | BEAM=2 autotuner | Done | tinygrad kernel optimization for Volta sm_72 |
+| 31 | UI window centering | Done | Undecorated window + vertical center on display |
+| 32 | VSync enabled by default | Done | Smooth 60 FPS rendering, no tearing |
+| 33 | MSAA disabled on Jetson | Done | Saves 4x fragment shader work |
+| 34 | UI 60 FPS default all platforms | Done | Was 20 FPS on tici, now 60 everywhere |
+| 35 | pandaStates publisher for demo | Done | Enables ignition→started→model rendering |
 
 ---
 
@@ -135,6 +140,9 @@ Compiled with `DEV=CUDA FLOAT16=1 JIT_BATCH_SIZE=16 TC=1 BEAM=2`.
 - dmonitoringmodeld exception catch: `except ImportError` didn't catch `TypeError`/`RuntimeError` from trt_runtime.so. Fix: `except Exception`.
 - UI core 6 collides with locationd core 0: UI used `cores = {0}` on Jetson. Fix: `cores = {6}` and apply after JETSON check.
 - fill_model_msg 42x `.tolist()` overhead: each small numpy array called `.tolist()` individually. Fix: batch via `array.T.tolist()` (1 call for 3-6 columns).
+- UI fullscreen mode clips content: `FLAG_FULLSCREEN_MODE` on 1920x960 window caused top clipping on 1920x1080 display. Fix: use `FLAG_WINDOW_UNDECORATED` + `set_window_position(0, y_offset)` to center vertically.
+- Model lines not rendering in demo: UI requires `pandaStates` with `ignitionLine=True` for `ui_state.ignition=True`, which gates `ui_state.started` and `model_renderer._render()`. Without pandaStates, model visualization was silently skipped.
+- MSAA 4x on Jetson wasting GPU: `FLAG_MSAA_4X_HINT` was applied to all platforms. Fix: only enable on PC where GPU headroom exists.
 
 ---
 
@@ -205,6 +213,20 @@ Dual codec: h264_nvmpi → h264_nvenc → software fallback. CBR, zero-latency.
 Prevents X11 standby from freezing UI at 1fps.
 
 **3.2 VNC Optimized** — `-wait 50 -defer 30 -noxdamage`, CPU from 37% to ~2% idle.
+
+**3.3 Window Centering** — `system/ui/lib/application.py`
+
+Replaced `FLAG_FULLSCREEN_MODE` with `FLAG_WINDOW_UNDECORATED` + `set_window_position(0, y_offset)`. Centers the 1920x960 window vertically on 1920x1080 display (60px top + 960px content + 60px bottom). Prevents top clipping that occurred with fullscreen mode.
+
+**3.4 VSync + 60 FPS Default** — `system/ui/lib/application.py`
+
+VSync enabled by default (`ENABLE_VSYNC=1`). FPS target set to 60 for all platforms (was 20 on tici/tizi). Eliminates tearing and provides smooth rendering.
+
+**3.5 MSAA Disabled on Jetson** — `system/ui/lib/application.py`
+
+`FLAG_MSAA_4X_HINT` only applied on PC. On Jetson/TICI, MSAA is skipped to save 4x fragment shader work, freeing GPU for model inference.
+
+**3.6 Display Resolution Mapping** — Comma 3 native: 2160x1080 (2:1 ultra-wide). Jetson HDMI: 1920x1080. `BIG=1 SCALE=0.889` maps the UI to 1920x960, filling 89% of the display with correct aspect ratio.
 
 ### Phase 4: Controls
 
@@ -278,6 +300,7 @@ Core 7 reduced from 8 to 6 processes. UI pinned to core 6 (was core 0, colliding
 | `selfdrive/modeld/dmonitoringmodeld.py` | CUDA env vars + DLA/TRT fallback + core 6 + CUDA zero-copy |
 | `selfdrive/modeld/fill_model_msg.py` | Batched .tolist() (42→~12 calls) |
 | `selfdrive/ui/ui.py` | UI core affinity: core 6 on Jetson (was core 0) |
+| `system/ui/lib/application.py` | Window centering, VSync default, MSAA off, 60 FPS, undecorated mode |
 | `selfdrive/modeld/SConscript` | jarch64 flags + nvcc + cudart + trt_runtime.so |
 | `selfdrive/modeld/models/commonmodel.h` | Removed false zero-copy |
 | `selfdrive/controls/controlsd.py` | Core 1 on Jetson |
@@ -306,7 +329,7 @@ Core 7 reduced from 8 to 6 processes. UI pinned to core 6 (was core 0, colliding
 
 ## ROADMAP
 
-### Done (Weeks 1-7)
+### Done (Weeks 1-8)
 - [x] FP16, CUDA Graphs, Tensor Cores, VisionBuf pinned
 - [x] TensorRT runner, NVDLA runner, Camera CSI V4L2
 - [x] NVDEC, NVENC, native CUDA kernels
@@ -324,10 +347,16 @@ Core 7 reduced from 8 to 6 processes. UI pinned to core 6 (was core 0, colliding
 - [x] TensorRT/DLA Python compatibility fix
 - [x] Core affinity redistribution (core 7 overload fix)
 - [x] VisionBuf upgraded to cudaHostRegisterMapped
+- [x] UI window centering (undecorated + vertical center on 1920x1080)
+- [x] VSync enabled by default (smooth 60 FPS, no tearing)
+- [x] MSAA disabled on Jetson (saves 4x fragment work)
+- [x] 60 FPS default for all platforms (was 20 on tici)
+- [x] pandaStates publisher for demo mode (enables model rendering)
+- [x] Display resolution mapping (2160x1080 → 1920x960 via SCALE=0.889)
+- [x] Model lines rendering verified (path, lane lines, lead indicators)
 
 ### Pending
 - [ ] Install TensorRT on Jetson (`sudo bash scripts/jetson_install_tensorrt.sh`)
-- [ ] UI fullscreen + VSync optimization
 - [ ] Render texture elimination
 - [ ] NV12 native format (eliminate conversions)
 - [ ] DMA-BUF for VisionBuf camera pipeline
