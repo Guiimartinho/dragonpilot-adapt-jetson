@@ -1,6 +1,6 @@
 /**
  * CUDA frame bridge for Jetson AGX Xavier.
- * Wraps CudaDrivingModelFrame for Python ctypes access.
+ * Wraps CudaDrivingModelFrame and CudaMonitoringModelFrame for Python ctypes access.
  *
  * This bridge enables zero-copy GPU preprocessing:
  *   VisionBuf (host SHM) → cudaMemcpy H2D → CUDA transform → CUDA loadyuv → device ptr
@@ -21,18 +21,20 @@
 
 static constexpr int MAX_FRAMES = 8;
 static CudaDrivingModelFrame* g_frames[MAX_FRAMES] = {};
+static CudaMonitoringModelFrame* g_mon_frames[MAX_FRAMES] = {};
 
 extern "C" {
 
+// ── Driving model frames ──
+
 int cuda_driving_frame_create(int temporal_skip) {
-  // Find first free slot (reuse destroyed slots)
   for (int id = 0; id < MAX_FRAMES; id++) {
     if (g_frames[id] == nullptr) {
       g_frames[id] = new CudaDrivingModelFrame(temporal_skip);
       return id;
     }
   }
-  fprintf(stderr, "cuda_frame_bridge: no free slots (max %d)\n", MAX_FRAMES);
+  fprintf(stderr, "cuda_frame_bridge: no free driving slots (max %d)\n", MAX_FRAMES);
   return -1;
 }
 
@@ -43,12 +45,6 @@ void cuda_driving_frame_destroy(int id) {
   }
 }
 
-/**
- * Prepare frame: run CUDA transform + loadyuv on YUV data.
- * If d_gpu_ptr is non-null (VisionBuf mapped memory), uses GPU-direct access
- * and skips the explicit H2D copy.
- * Returns CUDA device pointer to preprocessed frame data.
- */
 uint64_t cuda_driving_frame_prepare(
     int id,
     const uint8_t* yuv_data,
@@ -78,6 +74,51 @@ void cuda_driving_frame_get_host_buffer(int id, uint8_t* host_dst, int size) {
   if (id < 0 || id >= MAX_FRAMES || !g_frames[id] || !host_dst) return;
   uint8_t* src = g_frames[id]->get_host_buffer(size);
   if (src) memcpy(host_dst, src, size);
+}
+
+// ── Monitoring model frames ──
+
+int cuda_monitoring_frame_create() {
+  for (int id = 0; id < MAX_FRAMES; id++) {
+    if (g_mon_frames[id] == nullptr) {
+      g_mon_frames[id] = new CudaMonitoringModelFrame();
+      return id;
+    }
+  }
+  fprintf(stderr, "cuda_frame_bridge: no free monitoring slots (max %d)\n", MAX_FRAMES);
+  return -1;
+}
+
+void cuda_monitoring_frame_destroy(int id) {
+  if (id >= 0 && id < MAX_FRAMES && g_mon_frames[id]) {
+    delete g_mon_frames[id];
+    g_mon_frames[id] = nullptr;
+  }
+}
+
+uint64_t cuda_monitoring_frame_prepare(
+    int id,
+    const uint8_t* yuv_data,
+    int width, int height, int stride, int uv_offset,
+    const float* projection,
+    const uint8_t* d_gpu_ptr)
+{
+  if (id < 0 || id >= MAX_FRAMES || !g_mon_frames[id]) return 0;
+  mat3 m;
+  memcpy(m.v, projection, 9 * sizeof(float));
+  uint8_t* result = g_mon_frames[id]->prepare(yuv_data, width, height, stride, uv_offset, m, d_gpu_ptr);
+  if (!result) return 0;
+  return (uint64_t)(uintptr_t)result;
+}
+
+uint64_t cuda_monitoring_frame_get_device_ptr(int id) {
+  if (id < 0 || id >= MAX_FRAMES || !g_mon_frames[id]) return 0;
+  return (uint64_t)(uintptr_t)g_mon_frames[id]->get_device_ptr();
+}
+
+int cuda_monitoring_frame_get_buf_size(int id) {
+  if (id < 0 || id >= MAX_FRAMES || !g_mon_frames[id]) return 0;
+  return g_mon_frames[id]->buf_size;
 }
 
 }  // extern "C"

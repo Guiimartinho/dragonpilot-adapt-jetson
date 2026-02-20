@@ -66,7 +66,19 @@ class ModelState:
       self.input_shapes = model_metadata['input_shapes']
       self.output_slices = model_metadata['output_slices']
 
-    self.frame = MonitoringModelFrame(cl_ctx)
+    # Jetson CUDA zero-copy: use native CUDA preprocessing instead of OpenCL
+    self._use_cuda_frame = False
+    if JETSON:
+      try:
+        self._init_cuda_bridge()
+        self._use_cuda_frame = True
+        cloudlog.warning("dmonitoringmodeld: CUDA zero-copy preprocessing enabled")
+      except Exception as e:
+        cloudlog.warning(f"dmonitoringmodeld: CUDA bridge not available ({e}), falling back to OpenCL")
+
+    if not self._use_cuda_frame:
+      self.frame = MonitoringModelFrame(cl_ctx)
+
     self.numpy_inputs = {
       'calib': np.zeros(self.input_shapes['calib'], dtype=np.float32),
     }
@@ -95,22 +107,60 @@ class ModelState:
       with open(MODEL_PKL_PATH, "rb") as f:
         self.model_run = pickle.load(f)
 
+  def _init_cuda_bridge(self):
+    """Initialize CUDA monitoring frame bridge for zero-copy GPU preprocessing."""
+    import ctypes
+    self._ctypes = ctypes
+    bridge_path = Path(__file__).parent / 'models/cuda_frame_bridge.so'
+    self._cuda_bridge = ctypes.CDLL(str(bridge_path))
+
+    self._cuda_bridge.cuda_monitoring_frame_create.restype = ctypes.c_int
+    self._cuda_bridge.cuda_monitoring_frame_create.argtypes = []
+    self._cuda_bridge.cuda_monitoring_frame_prepare.restype = ctypes.c_uint64
+    self._cuda_bridge.cuda_monitoring_frame_prepare.argtypes = [
+      ctypes.c_int, ctypes.c_void_p,
+      ctypes.c_int, ctypes.c_int, ctypes.c_int, ctypes.c_int,
+      ctypes.c_void_p, ctypes.c_void_p
+    ]
+    self._cuda_bridge.cuda_monitoring_frame_get_buf_size.restype = ctypes.c_int
+    self._cuda_bridge.cuda_monitoring_frame_get_buf_size.argtypes = [ctypes.c_int]
+    self._cuda_bridge.cuda_monitoring_frame_destroy.restype = None
+    self._cuda_bridge.cuda_monitoring_frame_destroy.argtypes = [ctypes.c_int]
+
+    self._cuda_frame_id = self._cuda_bridge.cuda_monitoring_frame_create()
+    if self._cuda_frame_id < 0:
+      raise RuntimeError("cuda_monitoring_frame_create failed")
+
   def run(self, buf: VisionBuf, calib: np.ndarray, transform: np.ndarray) -> tuple[np.ndarray, float]:
     self.numpy_inputs['calib'][0,:] = calib
 
     t1 = time.perf_counter()
 
-    input_img_cl = self.frame.prepare(buf, transform.flatten())
-    if TICI:
-      # The imgs tensors are backed by Qualcomm opencl memory, only need init once
+    if self._use_cuda_frame:
+      # Jetson CUDA path: VisionBuf → CUDA transform → device ptr → Tensor.from_blob()
+      proj = transform.flatten()
+      d_gpu_ptr = self._ctypes.c_void_p(buf.d_addr) if hasattr(buf, 'd_addr') and buf.d_addr else None
+      dev_ptr = self._cuda_bridge.cuda_monitoring_frame_prepare(
+        self._cuda_frame_id,
+        self._ctypes.c_void_p(buf.data.ctypes.data),
+        buf.width, buf.height, buf.stride, buf.uv_offset,
+        proj.ctypes.data_as(self._ctypes.POINTER(self._ctypes.c_float)),
+        d_gpu_ptr
+      )
+      if dev_ptr != 0:
+        if 'input_img' not in self.tensor_inputs:
+          self.tensor_inputs['input_img'] = Tensor.from_blob(dev_ptr, self.input_shapes['input_img'], dtype=dtypes.uint8, device='CUDA').realize()
+      else:
+        cloudlog.error("cuda_monitoring_frame_prepare failed")
+    elif TICI:
+      input_img_cl = self.frame.prepare(buf, transform.flatten())
       if 'input_img' not in self.tensor_inputs:
         self.tensor_inputs['input_img'] = qcom_tensor_from_opencl_address(input_img_cl.mem_address, self.input_shapes['input_img'], dtype=dtypes.uint8)
     else:
-      # Generic path: OpenCL buffer → CPU → Tensor (used by Jetson CUDA, PC CPU)
+      input_img_cl = self.frame.prepare(buf, transform.flatten())
       self.tensor_inputs['input_img'] = Tensor(self.frame.buffer_from_cl(input_img_cl).reshape(self.input_shapes['input_img']), dtype=dtypes.uint8).realize()
 
     if self._use_dla or self._use_trt:
-      # DLA/TensorRT path: convert tensors to numpy for TRT inference
       np_inputs = {}
       for k, v in self.tensor_inputs.items():
         np_inputs[k] = v.numpy() if hasattr(v, 'numpy') else np.asarray(v)
