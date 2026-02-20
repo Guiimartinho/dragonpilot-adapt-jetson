@@ -276,14 +276,19 @@ class GuiApplication:
       flags = 0
       if ENABLE_VSYNC:
         flags |= rl.ConfigFlags.FLAG_VSYNC_HINT
-      if not PC:  # Jetson/TICI: use fullscreen for lowest latency
-        flags |= rl.ConfigFlags.FLAG_FULLSCREEN_MODE
+      if not PC:  # Jetson/TICI: use undecorated window for lowest latency
         flags |= rl.ConfigFlags.FLAG_WINDOW_UNDECORATED
       else:
         flags |= rl.ConfigFlags.FLAG_MSAA_4X_HINT  # Only MSAA on PC (has GPU headroom)
       rl.set_config_flags(flags)
 
       rl.init_window(self._scaled_width, self._scaled_height, title)
+
+      if not PC:
+        # Center window vertically on display (e.g. 1920x960 on 1920x1080 → y_offset=60)
+        monitor_h = rl.get_monitor_height(0)
+        y_offset = max(0, (monitor_h - self._scaled_height) // 2)
+        rl.set_window_position(0, y_offset)
 
       needs_render_texture = (self._scale != 1.0) or BURN_IN_MODE or RECORD  # Render texture needed when scale != 1.0 (Jetson, PC)
       if self._scale != 1.0:
