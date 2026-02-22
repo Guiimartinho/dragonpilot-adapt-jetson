@@ -94,7 +94,10 @@ nohup ./tools/replay/replay --demo > /tmp/replay.log 2>&1 &
 while [ ! -S /tmp/visionipc_camerad ]; do sleep 0.5; done
 
 # modeld (CUDA zero-copy + tinygrad)
-nohup env FLOAT16=1 TC=1 BEAM=2 JIT_BATCH_SIZE=16 \
+# CUDA_MODULE_LOADING=LAZY evita carregar todos os modulos CUDA de uma vez
+# JIT_BATCH_SIZE=16 para driving (32 para dmonitoringmodeld)
+# BEAM=2 faz autotuning de kernels (~90s na primeira vez, depois cached)
+nohup env FLOAT16=1 TC=1 BEAM=2 JIT_BATCH_SIZE=16 CUDA_MODULE_LOADING=LAZY \
   python3 selfdrive/modeld/modeld.py --demo > /tmp/modeld.log 2>&1 &
 
 # deviceState + pandaStates publisher (necessario para modo demo)

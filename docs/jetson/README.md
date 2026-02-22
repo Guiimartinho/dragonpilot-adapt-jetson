@@ -18,13 +18,13 @@ Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 | dmonitoringmodeld | OK | **20.65ms median, CUDA zero-copy + DLA/TRT fallback** |
 | TensorRT (opcional) | OK | Script de instalacao pronto, 2-3x speedup esperado |
 | DLA (dmonitoring) | OK | Fallback chain: DLA0→DLA1→GPU TensorRT→tinygrad |
-| CUDA kernels nativos | OK | transform.cu + loadyuv.cu compilados via nvcc |
-| CUDA zero-copy (driving + dmon) | OK | Tensor.from_blob, default stream, lazy GPU init |
+| CUDA kernels nativos | OK | transform.cu (__ldg() Volta cache) + loadyuv.cu via nvcc sm_72 |
+| CUDA zero-copy (driving + dmon) | OK | Tensor.from_blob, default stream, lazy GPU init, ring buffer circular |
 | fill_model_msg batched | OK | 42 .tolist()→~12, bulk T.tolist() conversions |
 | UI (raylib/OpenGL) | OK | Core 6, VSync, 60 FPS, centered window, model lines active |
-| Replay (NVDEC) | OK | Decode HW via V4L2/CUDA hwaccel |
-| Encoder (NVENC) | OK | h264_nvmpi / h264_nvenc |
-| Core affinity (8 cores) | OK | SCHED_FIFO, distribuicao otimizada, UI core 6 |
+| Replay (NVDEC) | OK | 3-tier: h264_nvv4l2dec → CUDA hwaccel → software (NV12/NV21/YUV420P) |
+| Encoder (NVENC) | OK | 3-tier: h264_nvmpi (L4T) → h264_nvenc → software, CBR zero-latency |
+| Core affinity (8 cores) | OK | SCHED_FIFO, distribuicao otimizada, UI core 6, encoderd core 3 |
 | Power management | OK | MAXN 30W dirigindo, MODE_10W estacionado |
 | BEAM=2 autotuner | OK | Kernel optimization para Volta sm_72 |
 | Display mapping | OK | 2160x1080 → 1920x960 (SCALE=0.889), centered on HDMI |
@@ -57,6 +57,19 @@ Port do DragonPilot 0.10.3 para rodar nativamente na NVIDIA Jetson AGX Xavier.
 | [Architecture Analysis](ARCHITECTURE_ANALYSIS.md) | Analise de hardware abstraction, build system, GPU pipeline |
 | [File Inventory](FILE_INVENTORY.md) | Inventario de todos os arquivos modificados/criados |
 | [Hardware Specs](HARDWARE_SPECS.md) | Specs da Jetson AGX Xavier vs comma Tici |
+
+## Core Affinity (8 cores ARM Carmel)
+
+| Core | Processo | Prioridade | Funcao |
+|------|----------|------------|--------|
+| 0 | locationd, calibrationd | 5 | Estimacao |
+| 1 | controlsd | 53 (FIFO) | Controle veicular |
+| 2 | card | 53 (FIFO) | Interface do carro |
+| 3 | encoderd, modeld | 52-54 (FIFO) | Encoding + inferencia CUDA |
+| 4 | modeld | 54 (FIFO) | Inferencia CUDA |
+| 5 | selfdrived | 53 (FIFO) | Estado do sistema |
+| 6 | dmonitoringmodeld, UI | 5/51 | Monitoramento + renderizacao |
+| 7 | plannerd, radard, dmonitoringd, paramsd, lagd, torqued | 5-51 | Planejamento + baixa prioridade |
 
 ## Arquitetura do Port
 
